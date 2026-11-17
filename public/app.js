@@ -3298,6 +3298,7 @@
     state.me = user;
     showAppShell();
     updateNotificationBanner();
+    updateAppUpdateUI();
     syncAndroidState(true);
     connectRealtime();
     await refreshChats();
@@ -3398,6 +3399,12 @@
     initEmojiPopover();
     wireEvents();
     updateAppUpdateUI();
+    if (hasAndroidUpdater()) {
+      try {
+        window.AndroidBridge.checkForAppUpdate(false);
+      } catch {
+      }
+    }
 
     try {
       const data = await api('/api/auth/me');

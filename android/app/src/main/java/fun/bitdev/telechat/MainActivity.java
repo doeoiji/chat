@@ -491,6 +491,9 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_NOTIF_PERMISSION && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startMessageServiceIfPermitted();
+            if (updateManager != null) {
+                updateManager.notifyIfUpdatePending();
+            }
         }
     }
 

@@ -47,6 +47,10 @@ public class UpdateManager {
     private static final String KEY_LAST_ETAG = "last_etag";
     private static final String KEY_CACHED_RELEASE_JSON = "cached_release_json";
     private static final String KEY_CACHED_VERSION = "cached_version";
+    private static final String KEY_CACHED_APK_URL = "cached_apk_url";
+    private static final String KEY_CACHED_NOTES = "cached_notes";
+    private static final String KEY_CACHED_HTML_URL = "cached_html_url";
+    private static final String KEY_CACHED_SIZE_BYTES = "cached_size_bytes";
     private static final String KEY_CACHED_FOR_INSTALLED_VER = "cached_for_installed_ver";
     private static final String KEY_API_BLOCKED_UNTIL = "api_blocked_until";
     private static final Pattern APK_HREF_PATTERN = Pattern.compile(
@@ -88,6 +92,8 @@ public class UpdateManager {
     private volatile long apkSizeBytes = 0;
     private volatile boolean updateAvailable = false;
     private volatile boolean waitingInstallPermission = false;
+    private volatile long lastNetworkCheckMs = 0;
+    private volatile String notifiedVersionThisSession = "";
     private static WeakReference<UpdateManager> activeInstance = new WeakReference<>(null);
 
     public UpdateManager(Context ctx, Listener listener) {
@@ -95,6 +101,37 @@ public class UpdateManager {
         this.listener = listener;
         activeInstance = new WeakReference<>(this);
         createUpdateChannel();
+        restoreCachedState();
+    }
+
+    private void restoreCachedState() {
+        try {
+            SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String currentVer = getInstalledVersionName();
+            String cachedVer = prefs.getString(KEY_CACHED_VERSION, "");
+            String cachedApk = prefs.getString(KEY_CACHED_APK_URL, "");
+            if (!cachedVer.isEmpty() && !cachedApk.isEmpty() && compareVersions(cachedVer, currentVer) > 0) {
+                latestVersion = cachedVer;
+                downloadUrl = cachedApk;
+                releaseNotes = prefs.getString(KEY_CACHED_NOTES, "");
+                releaseHtmlUrl = prefs.getString(KEY_CACHED_HTML_URL, "");
+                apkSizeBytes = prefs.getLong(KEY_CACHED_SIZE_BYTES, 0);
+                updateAvailable = true;
+                status = "available";
+            } else if (!cachedVer.isEmpty()) {
+                latestVersion = compareVersions(cachedVer, currentVer) >= 0 ? cachedVer : currentVer;
+                updateAvailable = false;
+                status = "up_to_date";
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public void notifyIfUpdatePending() {
+        if (updateAvailable && !latestVersion.isEmpty() && !latestVersion.equals(notifiedVersionThisSession)) {
+            notifiedVersionThisSession = latestVersion;
+            showUpdateNotification(latestVersion);
+        }
     }
 
     public static void notifyInstallSuccess() {
@@ -220,20 +257,16 @@ public class UpdateManager {
         if (checking || downloading) return;
         SharedPreferences prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String currentVer = getInstalledVersionName();
-        if (!manual) {
-            long lastCheck = prefs.getLong(KEY_LAST_CHECK_AT, 0);
-            String cachedForInstalled = prefs.getString(KEY_CACHED_FOR_INSTALLED_VER, "");
-            String cachedVer = prefs.getString(KEY_CACHED_VERSION, "");
-            // Auto-check at most once every 30 minutes across launches unless manually requested
-            if (System.currentTimeMillis() - lastCheck < 30 * 60 * 1000L
-                && currentVer.equals(cachedForInstalled)
-                && !cachedVer.isEmpty()) {
-                if (latestVersion.isEmpty()) {
-                    latestVersion = cachedVer;
-                }
-                emitState();
-                return;
+        long nowMs = System.currentTimeMillis();
+        // Avoid duplicate concurrent/back-to-back auto checks within 15 seconds while still
+        // checking live on every app restart and page refresh.
+        if (!manual && (nowMs - lastNetworkCheckMs) < 15_000L && !latestVersion.isEmpty()) {
+            if (notifyIfFound && updateAvailable && !latestVersion.equals(notifiedVersionThisSession)) {
+                notifiedVersionThisSession = latestVersion;
+                showUpdateNotification(latestVersion);
             }
+            emitState();
+            return;
         }
 
         checking = true;
@@ -247,9 +280,10 @@ public class UpdateManager {
             try {
                 String repo = ctx.getString(R.string.github_repo);
                 ReleaseMeta release = fetchLatestRelease(repo, prefs);
+                lastNetworkCheckMs = System.currentTimeMillis();
 
                 prefs.edit()
-                    .putLong(KEY_LAST_CHECK_AT, System.currentTimeMillis())
+                    .putLong(KEY_LAST_CHECK_AT, lastNetworkCheckMs)
                     .putString(KEY_CACHED_FOR_INSTALLED_VER, currentVer)
                     .apply();
 
@@ -262,13 +296,22 @@ public class UpdateManager {
                     releaseHtmlUrl = "";
                     apkSizeBytes = 0;
                     status = "up_to_date";
-                    prefs.edit().putString(KEY_CACHED_VERSION, latestVersion).apply();
+                    prefs.edit()
+                        .putString(KEY_CACHED_VERSION, latestVersion)
+                        .remove(KEY_CACHED_APK_URL)
+                        .apply();
                     emitState();
                     return;
                 }
 
                 String cleanRemote = release.tag.replaceFirst("^[vV]", "");
-                prefs.edit().putString(KEY_CACHED_VERSION, !cleanRemote.isEmpty() ? cleanRemote : currentVer).apply();
+                prefs.edit()
+                    .putString(KEY_CACHED_VERSION, !cleanRemote.isEmpty() ? cleanRemote : currentVer)
+                    .putString(KEY_CACHED_APK_URL, release.apkUrl)
+                    .putString(KEY_CACHED_NOTES, release.notes)
+                    .putString(KEY_CACHED_HTML_URL, release.htmlUrl)
+                    .putLong(KEY_CACHED_SIZE_BYTES, release.apkSize)
+                    .apply();
 
                 if (!cleanRemote.isEmpty() && !release.apkUrl.isEmpty() && compareVersions(cleanRemote, currentVer) > 0) {
                     latestVersion = cleanRemote;
@@ -279,12 +322,10 @@ public class UpdateManager {
                     updateAvailable = true;
                     status = "available";
 
-                    if (notifyIfFound) {
-                        String alreadyNotified = prefs.getString(KEY_NOTIFIED_VERSION, "");
-                        if (!cleanRemote.equals(alreadyNotified)) {
-                            prefs.edit().putString(KEY_NOTIFIED_VERSION, cleanRemote).apply();
-                            showUpdateNotification(cleanRemote);
-                        }
+                    if (notifyIfFound && !cleanRemote.equals(notifiedVersionThisSession)) {
+                        notifiedVersionThisSession = cleanRemote;
+                        prefs.edit().putString(KEY_NOTIFIED_VERSION, cleanRemote).apply();
+                        showUpdateNotification(cleanRemote);
                     }
                 } else {
                     latestVersion = !cleanRemote.isEmpty() ? cleanRemote : currentVer;
