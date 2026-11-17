@@ -6,8 +6,17 @@ const { validateEmail } = require('./emailValidator');
 const { hashPassword, verifyPassword } = require('./auth');
 
 const USERNAME_REGEX = /^[a-z0-9_]{3,24}$/;
-const CHAT_ID_REGEX = /^dm_[a-z0-9_]{3,24}__[a-z0-9_]{3,24}$/;
+const CHAT_ID_REGEX = /^(?:dm_[a-z0-9_]{3,24}__[a-z0-9_]{3,24}|(?:grp|chn)_[a-z0-9]{10,24})$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractMentions(text) {
+  if (typeof text !== 'string' || !text.includes('@')) return [];
+  const found = new Set();
+  for (const m of text.matchAll(/(?:^|\s)@([a-z0-9_]{3,24})\b/gi)) {
+    found.add(m[1].toLowerCase());
+  }
+  return Array.from(found);
+}
 
 const AVATAR_GRADIENTS = [
   'linear-gradient(135deg, #5288C1 0%, #3A6EA5 100%)',
@@ -683,7 +692,15 @@ function createStorage(config) {
 
   function replaceUsernameInChatData(meta, messages, oldUsername, newUsername, oldChatId, newChatId) {
     meta.id = newChatId;
-    meta.participants = meta.participants.map((p) => (p === oldUsername ? newUsername : p)).sort();
+    const isDm = !meta.type || meta.type === 'dm';
+    meta.participants = meta.participants.map((p) => (p === oldUsername ? newUsername : p));
+    if (isDm) meta.participants.sort();
+    if (Array.isArray(meta.admins)) {
+      meta.admins = meta.admins.map((a) => (a === oldUsername ? newUsername : a));
+    }
+    if (meta.createdBy === oldUsername) {
+      meta.createdBy = newUsername;
+    }
     if (meta.unreadCounts && Object.prototype.hasOwnProperty.call(meta.unreadCounts, oldUsername)) {
       meta.unreadCounts[newUsername] = meta.unreadCounts[oldUsername];
       delete meta.unreadCounts[oldUsername];
@@ -697,6 +714,9 @@ function createStorage(config) {
     for (const msg of messages) {
       if (msg.sender === oldUsername) msg.sender = newUsername;
       if (msg.replyTo && msg.replyTo.sender === oldUsername) msg.replyTo.sender = newUsername;
+      if (Array.isArray(msg.mentions)) {
+        msg.mentions = msg.mentions.map((u) => (u === oldUsername ? newUsername : u));
+      }
       if (Array.isArray(msg.readBy)) {
         msg.readBy = msg.readBy.map((u) => (u === oldUsername ? newUsername : u));
       }
@@ -810,8 +830,9 @@ function createStorage(config) {
             const meta = await readJson(metaPath);
             if (!meta || !Array.isArray(meta.participants) || !meta.participants.includes(oldClean)) return;
 
+            const isDm = !meta.type || meta.type === 'dm';
             const peer = meta.participants.find((p) => p !== oldClean) || newClean;
-            const newChatId = getDmChatId(newClean, peer);
+            const newChatId = isDm ? getDmChatId(newClean, peer) : oldChatId;
             const messages = (await readJson(messagesPath, [])) || [];
 
             replaceUsernameInChatData(meta, messages, oldClean, newClean, oldChatId, newChatId);
@@ -959,13 +980,34 @@ function createStorage(config) {
         continue;
       }
 
+      if (meta.type === 'group' || meta.type === 'channel') {
+        chats.push({
+          id: meta.id,
+          type: meta.type,
+          title: meta.title || 'Untitled Room',
+          description: meta.description || '',
+          inviteCode: meta.inviteCode || '',
+          avatarColor: meta.avatarColor || AVATAR_GRADIENTS[0],
+          admins: Array.isArray(meta.admins) ? meta.admins : [],
+          createdBy: meta.createdBy || '',
+          participants: meta.participants,
+          memberCount: meta.participants.length,
+          peer: null,
+          createdAt: meta.createdAt,
+          updatedAt: meta.updatedAt,
+          lastMessage: meta.lastMessage,
+          unreadCount: (meta.unreadCounts && meta.unreadCounts[clean]) || 0
+        });
+        continue;
+      }
+
       const peerUsername = meta.participants.find((p) => p !== clean) || clean;
       const peer = toPublicUser(await getUserByUsername(peerUsername));
       if (!peer) continue;
 
       chats.push({
         id: meta.id,
-        type: meta.type,
+        type: meta.type || 'dm',
         participants: meta.participants,
         peer,
         createdAt: meta.createdAt,
@@ -991,7 +1033,7 @@ function createStorage(config) {
     return { meta, messages };
   }
 
-  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null }) {
+  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', game = null, allowChannelSystem = false }) {
     const folder = chatFolder(chatId);
     if (!folder) {
       const err = new Error('Invalid chat ID.');
@@ -1000,7 +1042,7 @@ function createStorage(config) {
     }
 
     const cleanText = typeof text === 'string' ? text.trim().slice(0, 4000) : '';
-    if (!cleanText && (!files || files.length === 0)) {
+    if (!cleanText && (!files || files.length === 0) && !game) {
       const err = new Error('Message text or at least one file is required.');
       err.statusCode = 400;
       throw err;
@@ -1016,6 +1058,11 @@ function createStorage(config) {
       if (!meta || !meta.participants.includes(senderUsername)) {
         const err = new Error('Chat not found.');
         err.statusCode = 404;
+        throw err;
+      }
+      if (meta.type === 'channel' && !allowChannelSystem && (!Array.isArray(meta.admins) || !meta.admins.includes(senderUsername))) {
+        const err = new Error('Only channel admins can post in this channel.');
+        err.statusCode = 403;
         throw err;
       }
 
@@ -1057,13 +1104,17 @@ function createStorage(config) {
       }
 
       const now = new Date().toISOString();
+      const mentions = extractMentions(cleanText);
       const message = {
         id: `msg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
         chatId,
+        kind: game ? 'game' : kind,
         sender: senderUsername,
         text: cleanText,
+        mentions,
         attachments,
         replyTo: replySnapshot,
+        game: game || undefined,
         reactions: {},
         readBy: [senderUsername],
         createdAt: now
@@ -1081,9 +1132,11 @@ function createStorage(config) {
 
       // Update meta
       meta.updatedAt = now;
-      const previewText = cleanText
-        ? cleanText.slice(0, 80)
-        : (attachments[0].isImage ? '📷 Photo' : `📎 ${attachments[0].originalName}`);
+      const previewText = game
+        ? `🎮 ${game.title || game.type}`
+        : (cleanText
+          ? cleanText.slice(0, 80)
+          : (attachments[0].isImage ? '📷 Photo' : `📎 ${attachments[0].originalName}`));
       meta.lastMessage = {
         id: message.id,
         sender: senderUsername,
@@ -1101,6 +1154,27 @@ function createStorage(config) {
       await writeJsonAtomic(metaPath, meta);
 
       return { message, meta };
+    });
+  }
+
+  async function mutateChatMessages(chatId, mutatorFn) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const meta = await readJson(metaPath);
+      if (!meta) return null;
+      const messages = (await readJson(messagesPath, [])) || [];
+      const result = await mutatorFn({ meta, messages, folder });
+      if (!result) return null;
+      if (result.saveMessages) {
+        await writeJsonAtomic(messagesPath, messages);
+      }
+      if (result.saveMeta) {
+        await writeJsonAtomic(metaPath, meta);
+      }
+      return { ...result, meta };
     });
   }
 
@@ -1251,7 +1325,13 @@ function createStorage(config) {
   return {
     USERNAME_REGEX,
     CHAT_ID_REGEX,
+    AVATAR_GRADIENTS,
     getDmChatId,
+    withLock,
+    chatFolder,
+    readJson,
+    writeJsonAtomic,
+    mutateChatMessages,
     toPublicUser,
     getUserByUsername,
     getUserByEmail,

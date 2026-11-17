@@ -35,6 +35,7 @@
     chats: [],
     activeChatId: null,
     activePeer: null,
+    activeRoom: null,
     messages: [],
     pendingFiles: [],
     replyTo: null,
@@ -151,6 +152,9 @@
     chatPeerStatus: $('chat-peer-status'),
     toggleChatSearchBtn: $('toggle-chat-search-btn'),
     toggleInfoBtn: $('toggle-info-btn'),
+    callAudioBtn: $('call-audio-btn'),
+    callVideoBtn: $('call-video-btn'),
+    openGamesBtn: $('open-games-btn'),
 
     chatSearchBar: $('chat-search-bar'),
     chatSearchInput: $('chat-search-input'),
@@ -179,19 +183,24 @@
     messageInput: $('message-input'),
     emojiBtn: $('emoji-btn'),
     emojiPopover: $('emoji-popover'),
+    mentionPopover: $('mention-popover'),
+    channelReadonlyBar: $('channel-readonly-bar'),
     sendBtn: $('send-btn'),
 
     infoDrawer: $('info-drawer'),
+    infoHeaderTitle: $('info-header-title'),
     closeInfoBtn: $('close-info-btn'),
     infoAvatar: $('info-avatar'),
     infoDisplayName: $('info-displayname'),
     infoStatus: $('info-status'),
     infoUsername: $('info-username'),
+    infoEmailRow: $('info-email-row'),
     infoEmail: $('info-email'),
     infoBioRow: $('info-bio-row'),
     infoBio: $('info-bio'),
     infoBirthdayRow: $('info-birthday-row'),
     infoBirthday: $('info-birthday'),
+    infoRoomControls: $('info-room-controls'),
     infoTabMedia: $('info-tab-media'),
     infoTabFiles: $('info-tab-files'),
     infoSharedContent: $('info-shared-content'),
@@ -340,9 +349,16 @@
 
   function linkifyText(text) {
     const escaped = escapeHtml(text);
-    return escaped.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+    const withLinks = escaped.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
       return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
     });
+    return withLinks
+      .split(/(<a\b[^>]*>.*?<\/a>)/g)
+      .map((part) => {
+        if (part.startsWith('<a ')) return part;
+        return part.replace(/(^|[^a-zA-Z0-9_./])@([a-zA-Z0-9_]{2,24})\b/g, '$1<span class="mention-tag" data-mention="$2">@$2</span>');
+      })
+      .join('');
   }
 
   function formatBytes(bytes) {
@@ -798,12 +814,20 @@
   }
 
   async function openChatByIdOrSender(chatId, senderUsername) {
+    if (chatId && (String(chatId).startsWith('grp_') || String(chatId).startsWith('chn_'))) {
+      await openRoomById(chatId);
+      return;
+    }
     if (senderUsername && state.me && senderUsername !== state.me.username) {
       await openChatWithUser(senderUsername);
       return;
     }
     if (chatId && state.me) {
       const chat = state.chats.find((c) => c.id === chatId);
+      if (chat && (chat.type === 'group' || chat.type === 'channel')) {
+        await openRoomById(chat.id);
+        return;
+      }
       if (chat && chat.peer) {
         await openChatWithUser(chat.peer.username);
         return;
@@ -1320,36 +1344,49 @@
     }
 
     els.sidebarList.innerHTML = visibleChats.map((chat) => {
+      const isRoom = chat.type === 'group' || chat.type === 'channel';
       const peer = chat.peer;
-      const isOnline = state.onlineUsers.has(peer.username) || peer.online;
+      const isOnline = !isRoom && peer && (state.onlineUsers.has(peer.username) || peer.online);
       const isActive = state.activeChatId === chat.id;
       const isTyping = state.typingPeers.has(chat.id);
       const last = chat.lastMessage;
       const draftObj = state.drafts[chat.id];
       const draftText = draftObj && draftObj.text ? draftObj.text.trim() : '';
-      let previewHtml = escapeHtml('Start chatting...');
+      let previewHtml = escapeHtml(isRoom ? (chat.description || 'No messages yet') : 'Start chatting...');
       if (isTyping) {
         previewHtml = escapeHtml('typing...');
       } else if (draftText) {
         previewHtml = `<span class="draft-prefix">Draft:</span> ${escapeHtml(draftText.replace(/\s+/g, ' '))}`;
       } else if (last) {
-        const prefix = last.sender === state.me.username ? 'You: ' : '';
+        const prefix = last.sender === state.me.username
+          ? 'You: '
+          : (isRoom && last.sender && last.sender !== 'system' ? `${last.sender}: ` : '');
         previewHtml = escapeHtml(`${prefix}${last.preview || ''}`);
       }
       const timeStr = last ? formatSidebarTime(last.createdAt) : '';
       const unread = Number(chat.unreadCount || 0);
+      const avatarSeed = isRoom
+        ? { displayName: chat.title, avatarColor: chat.avatarColor || 'var(--accent)' }
+        : peer;
+      const rowTitle = isRoom ? chat.title : (peer.displayName || peer.username);
+      const roomTag = isRoom
+        ? `<span class="room-kind-tag">${chat.type === 'channel' ? 'Channel' : 'Group'}</span>`
+        : '';
+      const openAttr = isRoom
+        ? `data-open-chat="${escapeHtml(chat.id)}"`
+        : `data-open-user="${escapeHtml(peer.username)}"`;
 
       return `
-        <div class="chat-row ${isActive ? 'active' : ''}" data-open-user="${escapeHtml(peer.username)}" role="listitem" tabindex="0">
+        <div class="chat-row ${isActive ? 'active' : ''}" ${openAttr} role="listitem" tabindex="0">
           <div class="avatar-wrap">
-            <div class="avatar" style="background: ${escapeHtml(peer.avatarColor || 'var(--accent)')}">
-              ${peer.avatarUrl ? `<img src="${escapeHtml(peer.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(peer))}
+            <div class="avatar" style="background: ${escapeHtml((avatarSeed && avatarSeed.avatarColor) || 'var(--accent)')}">
+              ${!isRoom && peer && peer.avatarUrl ? `<img src="${escapeHtml(peer.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(avatarSeed))}
             </div>
             ${isOnline ? '<span class="online-dot"></span>' : ''}
           </div>
           <div class="chat-row-body">
             <div class="chat-row-top">
-              <span class="chat-row-name">${escapeHtml(peer.displayName || peer.username)}</span>
+              <span class="chat-row-name">${roomTag}${escapeHtml(rowTitle)}</span>
               <span class="chat-row-time">${escapeHtml(timeStr)}</span>
             </div>
             <div class="chat-row-bottom">
@@ -1401,11 +1438,9 @@
   // Active Chat & Messages
   // =========================================================================
   function updateChatHeaderStatus() {
-    if (!state.activePeer || !state.activeChatId) return;
+    if (!state.activeChatId || (!state.activePeer && !state.activeRoom)) return;
     const isTyping = state.typingPeers.has(state.activeChatId);
-    const isOnline = state.onlineUsers.has(state.activePeer.username) || state.activePeer.online;
 
-    els.chatPeerDot.classList.toggle('hidden', !isOnline);
     els.chatPeerStatus.className = 'chat-peer-status';
 
     if (els.typingBubbleRow) {
@@ -1417,6 +1452,22 @@
         });
       }
     }
+
+    if (state.activeRoom) {
+      els.chatPeerDot.classList.add('hidden');
+      const count = state.activeRoom.memberCount || (Array.isArray(state.activeRoom.members) ? state.activeRoom.members.length : 1);
+      const kindLabel = state.activeRoom.type === 'channel' ? 'Channel' : 'Group';
+      const statusText = isTyping ? 'someone is typing...' : `${kindLabel} • ${count} member${count === 1 ? '' : 's'}`;
+      els.chatPeerStatus.textContent = statusText;
+      if (isTyping) els.chatPeerStatus.classList.add('typing');
+      if (state.infoOpen) {
+        els.infoStatus.textContent = `${kindLabel} • ${count} member${count === 1 ? '' : 's'}`;
+      }
+      return;
+    }
+
+    const isOnline = state.onlineUsers.has(state.activePeer.username) || state.activePeer.online;
+    els.chatPeerDot.classList.toggle('hidden', !isOnline);
 
     if (isTyping) {
       els.chatPeerStatus.textContent = 'typing...';
@@ -1433,6 +1484,97 @@
     }
   }
 
+  function syncComposerAccessForActiveChat() {
+    const composerRow = typeof document !== 'undefined' ? document.querySelector('.composer-row') : null;
+    const isChannel = state.activeRoom && state.activeRoom.type === 'channel';
+    const isAdmin = isChannel && state.me && Array.isArray(state.activeRoom.admins) && state.activeRoom.admins.includes(state.me.username);
+    const readOnly = Boolean(isChannel && !isAdmin);
+
+    if (els.channelReadonlyBar) {
+      els.channelReadonlyBar.classList.toggle('hidden', !readOnly);
+    }
+    if (composerRow) {
+      composerRow.classList.toggle('hidden', readOnly);
+    }
+    if (els.callAudioBtn) els.callAudioBtn.classList.toggle('hidden', Boolean(state.activeRoom));
+    if (els.callVideoBtn) els.callVideoBtn.classList.toggle('hidden', Boolean(state.activeRoom));
+    if (els.openGamesBtn) els.openGamesBtn.classList.toggle('hidden', readOnly);
+  }
+
+  async function applyOpenedChat(data) {
+    const chat = data.chat;
+    const isRoom = chat.type === 'group' || chat.type === 'channel';
+
+    state.activeChatId = chat.id;
+    state.activePeer = isRoom ? null : chat.peer;
+    state.activeRoom = isRoom ? chat : null;
+    state.messages = data.messages || [];
+    state.unreadBelowCount = 0;
+    state.userScrolledSinceOpen = false;
+    const firstUnread = state.me
+      ? state.messages.find((m) => m.sender !== 'system' && m.sender !== state.me.username && (!Array.isArray(m.readBy) || !m.readBy.includes(state.me.username)))
+      : null;
+    state.firstUnreadMsgId = firstUnread ? firstUnread.id : null;
+    state.replyTo = null;
+    els.replyBanner.classList.add('hidden');
+    state.chatSearch = { open: false, query: '', matches: [], index: -1 };
+    els.chatSearchBar.classList.add('hidden');
+    els.chatSearchInput.value = '';
+    els.chatSearchCount.textContent = '0 / 0';
+    if (els.mentionPopover) els.mentionPopover.classList.add('hidden');
+
+    const savedDraft = state.drafts[state.activeChatId];
+    els.messageInput.value = savedDraft && savedDraft.text ? savedDraft.text : '';
+    if (state.pendingShare) {
+      await applyPendingShareToActiveChat();
+    }
+
+    if (state.activePeer && state.activePeer.online) {
+      state.onlineUsers.add(state.activePeer.username);
+    }
+
+    els.chatEmptyState.classList.add('hidden');
+    els.activeChat.classList.remove('hidden');
+    els.appShell.classList.add('mobile-chat-open');
+
+    autoResizeInput();
+    requestAnimationFrame(() => autoResizeInput());
+
+    if (isRoom) {
+      renderAvatar(els.chatPeerAvatar, { displayName: chat.title, avatarColor: chat.avatarColor || 'var(--accent)' });
+      els.chatPeerName.textContent = chat.title || 'Group';
+    } else {
+      renderAvatar(els.chatPeerAvatar, state.activePeer);
+      els.chatPeerName.textContent = state.activePeer.displayName || state.activePeer.username;
+    }
+    syncComposerAccessForActiveChat();
+    updateChatHeaderStatus();
+
+    renderMessages(false);
+    restoreChatScrollPosition(state.activeChatId);
+    if (state.infoOpen) renderInfoDrawer();
+    renderSidebar();
+
+    if (state.browseMode || state.searchQuery) {
+      state.browseMode = false;
+      state.searchQuery = '';
+      els.sidebarSearch.value = '';
+      renderSidebar();
+    }
+
+    await markActiveChatRead();
+    syncAndroidState();
+    const isMobileOrTouch = typeof window.matchMedia === 'function' &&
+      window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
+    if (isMobileOrTouch) {
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        document.activeElement.blur();
+      }
+    } else if (!els.channelReadonlyBar || els.channelReadonlyBar.classList.contains('hidden')) {
+      els.messageInput.focus();
+    }
+  }
+
   async function openChatWithUser(targetUsername) {
     try {
       if (state.activeChatId) {
@@ -1445,67 +1587,25 @@
         method: 'POST',
         body: { targetUsername }
       });
+      await applyOpenedChat(data);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
 
-      state.activeChatId = data.chat.id;
-      state.activePeer = data.chat.peer;
-      state.messages = data.messages || [];
-      state.unreadBelowCount = 0;
-      state.userScrolledSinceOpen = false;
-      const firstUnread = state.me
-        ? state.messages.find((m) => m.sender !== state.me.username && (!Array.isArray(m.readBy) || !m.readBy.includes(state.me.username)))
-        : null;
-      state.firstUnreadMsgId = firstUnread ? firstUnread.id : null;
-      state.replyTo = null;
-      els.replyBanner.classList.add('hidden');
-      state.chatSearch = { open: false, query: '', matches: [], index: -1 };
-      els.chatSearchBar.classList.add('hidden');
-      els.chatSearchInput.value = '';
-      els.chatSearchCount.textContent = '0 / 0';
-
-      const savedDraft = state.drafts[state.activeChatId];
-      els.messageInput.value = savedDraft && savedDraft.text ? savedDraft.text : '';
-      if (state.pendingShare) {
-        await applyPendingShareToActiveChat();
-      }
-
-      if (state.activePeer.online) state.onlineUsers.add(state.activePeer.username);
-
-      els.chatEmptyState.classList.add('hidden');
-      els.activeChat.classList.remove('hidden');
-      els.appShell.classList.add('mobile-chat-open');
-
-      // Resize composer ONLY after #active-chat is visible so scrollHeight is never 0px
-      autoResizeInput();
-      requestAnimationFrame(() => autoResizeInput());
-
-      renderAvatar(els.chatPeerAvatar, state.activePeer);
-      els.chatPeerName.textContent = state.activePeer.displayName || state.activePeer.username;
-      updateChatHeaderStatus();
-
-      renderMessages(false);
-      restoreChatScrollPosition(state.activeChatId);
-      if (state.infoOpen) renderInfoDrawer();
-      renderSidebar();
-
-      // Clear search after picking a user? Keep chats visible if they clicked from browse/search
-      if (state.browseMode || state.searchQuery) {
-        state.browseMode = false;
-        state.searchQuery = '';
-        els.sidebarSearch.value = '';
-        renderSidebar();
-      }
-
-      await markActiveChatRead();
-      syncAndroidState();
-      const isMobileOrTouch = typeof window.matchMedia === 'function' &&
-        window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
-      if (isMobileOrTouch) {
-        if (document.activeElement && typeof document.activeElement.blur === 'function') {
-          document.activeElement.blur();
+  async function openRoomById(chatId) {
+    try {
+      if (state.activeChatId) {
+        saveCurrentChatScroll();
+        if (els.messageInput) {
+          saveChatDraft(state.activeChatId, els.messageInput.value);
         }
-      } else {
-        els.messageInput.focus();
       }
+      const data = await api('/api/chats/open', {
+        method: 'POST',
+        body: { chatId }
+      });
+      await applyOpenedChat(data);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -1572,15 +1672,19 @@
 
   function renderMessages(scrollToBottom = false) {
     const msgs = state.messages;
+    const roomTitle = state.activeRoom ? (state.activeRoom.title || 'this room') : (state.activePeer ? (state.activePeer.displayName || state.activePeer.username) : 'this chat');
     if (msgs.length === 0) {
       els.messagesList.innerHTML = `
-        <div class="date-separator">No messages yet — say hi to ${escapeHtml(state.activePeer.displayName || state.activePeer.username)}! 👋</div>
+        <div class="date-separator">No messages yet — say hi to ${escapeHtml(roomTitle)}! 👋</div>
       `;
       return;
     }
 
     let lastDateStr = '';
     const htmlParts = [];
+    const roomProfiles = state.activeRoom && Array.isArray(state.activeRoom.members)
+      ? new Map(state.activeRoom.members.filter((p) => p && p.username).map((p) => [p.username, p]))
+      : null;
 
     for (let i = 0; i < msgs.length; i++) {
       const msg = msgs[i];
@@ -1597,9 +1701,16 @@
         htmlParts.push('<div class="unread-divider">Unread Messages</div>');
       }
 
+      if (msg.kind === 'system' || msg.sender === 'system') {
+        htmlParts.push(`<div class="msg-system-pill" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">${escapeHtml(msg.text || '')}</div>`);
+        continue;
+      }
+
       const isMine = msg.sender === state.me.username;
-      const samePrev = prev && prev.sender === msg.sender && new Date(prev.createdAt).toDateString() === dateStr;
-      const sameNext = next && next.sender === msg.sender && new Date(next.createdAt).toDateString() === dateStr;
+      const prevIsNormal = prev && prev.kind !== 'system' && prev.sender !== 'system';
+      const nextIsNormal = next && next.kind !== 'system' && next.sender !== 'system';
+      const samePrev = prevIsNormal && prev.sender === msg.sender && new Date(prev.createdAt).toDateString() === dateStr;
+      const sameNext = nextIsNormal && next.sender === msg.sender && new Date(next.createdAt).toDateString() === dateStr;
 
       const groupClasses = [
         isMine ? 'outgoing' : 'incoming',
@@ -1614,9 +1725,16 @@
         </div>
       ` : '';
 
-      const readByPeer = Array.isArray(msg.readBy) && state.activePeer && msg.readBy.includes(state.activePeer.username);
+      let readByOther = false;
+      if (Array.isArray(msg.readBy)) {
+        if (state.activePeer) {
+          readByOther = msg.readBy.includes(state.activePeer.username);
+        } else if (state.me) {
+          readByOther = msg.readBy.some((u) => u !== state.me.username);
+        }
+      }
       const ticksHtml = isMine
-        ? `<span class="read-ticks ${readByPeer ? 'read' : ''}" title="${readByPeer ? 'Read' : 'Sent'}">${readByPeer ? '✓✓' : '✓'}</span>`
+        ? `<span class="read-ticks ${readByOther ? 'read' : ''}" title="${readByOther ? 'Read' : 'Sent'}">${readByOther ? '✓✓' : '✓'}</span>`
         : '';
 
       const actionsHtml = `
@@ -1625,11 +1743,29 @@
         </div>
       `;
 
+      let senderHeaderHtml = '';
+      if (state.activeRoom && !isMine && !samePrev) {
+        const sp = roomProfiles ? roomProfiles.get(msg.sender) : null;
+        const label = sp ? (sp.displayName || `@${sp.username}`) : `@${msg.sender}`;
+        senderHeaderHtml = `<div class="msg-sender-name" style="color:${escapeHtml((sp && sp.avatarColor) || 'var(--accent)')}">${escapeHtml(label)}</div>`;
+      }
+
+      let gameCardHtml = '';
+      if (msg.kind === 'game' && msg.game) {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.renderGameBubbleHtml === 'function') {
+          gameCardHtml = window.VibeRoomFeatures.renderGameBubbleHtml(msg);
+        } else {
+          gameCardHtml = `<div class="game-card-msg" data-open-game="${escapeHtml(msg.game.id)}"><strong>🎮 ${escapeHtml(msg.game.title || msg.game.type)}</strong><div>${escapeHtml(msg.game.status === 'finished' ? 'Finished' : `Turn: @${msg.game.turn}`)}</div></div>`;
+        }
+      }
+
       const bubbleHtml = `
         <div class="msg-bubble">
+          ${senderHeaderHtml}
           ${replyHtml}
           ${renderAttachmentsHtml(msg)}
-          ${msg.text ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
+          ${gameCardHtml}
+          ${msg.text && msg.kind !== 'game' ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
           ${renderReactionsHtml(msg)}
           <div class="msg-footer">
             <span>${escapeHtml(formatTime(msg.createdAt))}</span>
@@ -1874,29 +2010,61 @@
   // Info Drawer (Profile & Shared Media / Files)
   // =========================================================================
   function renderInfoDrawer() {
-    if (!state.activePeer) return;
-    const p = state.activePeer;
-    renderAvatar(els.infoAvatar, p);
-    els.infoDisplayName.textContent = p.displayName || p.username;
-    els.infoUsername.textContent = `@${p.username}`;
-    els.infoEmail.textContent = p.email;
-    const isOnline = state.onlineUsers.has(p.username) || p.online;
-    els.infoStatus.textContent = isOnline ? 'online' : formatLastSeen(p.lastSeen);
-    if (p.bio) {
-      els.infoBioRow.classList.remove('hidden');
-      els.infoBio.textContent = p.bio;
-    } else {
-      els.infoBioRow.classList.add('hidden');
-    }
-
-    if (els.infoBirthdayRow && els.infoBirthday) {
-      const bdayInfo = formatBirthdayLabel(p.birthday);
-      if (bdayInfo) {
-        els.infoBirthdayRow.classList.remove('hidden');
-        els.infoBirthday.textContent = bdayInfo.text;
-        els.infoBirthday.classList.toggle('birthday-today', bdayInfo.isToday);
+    if (!state.activePeer && !state.activeRoom) return;
+    if (state.activeRoom) {
+      const r = state.activeRoom;
+      if (els.infoHeaderTitle) {
+        els.infoHeaderTitle.textContent = r.type === 'channel' ? 'Channel Info' : 'Group Info';
+      }
+      renderAvatar(els.infoAvatar, { displayName: r.title, avatarColor: r.avatarColor || 'var(--accent)' });
+      els.infoDisplayName.textContent = r.title || 'Room';
+      els.infoUsername.textContent = r.type === 'channel' ? 'Broadcast Channel' : 'Group Chat';
+      const count = r.memberCount || (Array.isArray(r.members) ? r.members.length : 1);
+      els.infoStatus.textContent = `${count} member${count === 1 ? '' : 's'}`;
+      if (els.infoEmailRow) els.infoEmailRow.classList.add('hidden');
+      if (els.infoBirthdayRow) els.infoBirthdayRow.classList.add('hidden');
+      if (r.description) {
+        els.infoBioRow.classList.remove('hidden');
+        els.infoBio.textContent = r.description;
       } else {
-        els.infoBirthdayRow.classList.add('hidden');
+        els.infoBioRow.classList.add('hidden');
+      }
+      if (els.infoRoomControls) {
+        els.infoRoomControls.classList.remove('hidden');
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.renderRoomInfo === 'function') {
+          window.VibeRoomFeatures.renderRoomInfo(els.infoRoomControls, r);
+        }
+      }
+    } else {
+      const p = state.activePeer;
+      if (els.infoHeaderTitle) els.infoHeaderTitle.textContent = 'User Info';
+      if (els.infoRoomControls) {
+        els.infoRoomControls.classList.add('hidden');
+        els.infoRoomControls.innerHTML = '';
+      }
+      if (els.infoEmailRow) els.infoEmailRow.classList.remove('hidden');
+      renderAvatar(els.infoAvatar, p);
+      els.infoDisplayName.textContent = p.displayName || p.username;
+      els.infoUsername.textContent = `@${p.username}`;
+      els.infoEmail.textContent = p.email;
+      const isOnline = state.onlineUsers.has(p.username) || p.online;
+      els.infoStatus.textContent = isOnline ? 'online' : formatLastSeen(p.lastSeen);
+      if (p.bio) {
+        els.infoBioRow.classList.remove('hidden');
+        els.infoBio.textContent = p.bio;
+      } else {
+        els.infoBioRow.classList.add('hidden');
+      }
+
+      if (els.infoBirthdayRow && els.infoBirthday) {
+        const bdayInfo = formatBirthdayLabel(p.birthday);
+        if (bdayInfo) {
+          els.infoBirthdayRow.classList.remove('hidden');
+          els.infoBirthday.textContent = bdayInfo.text;
+          els.infoBirthday.classList.toggle('birthday-today', bdayInfo.isToday);
+        } else {
+          els.infoBirthdayRow.classList.add('hidden');
+        }
       }
     }
 
@@ -2074,15 +2242,18 @@
 
     es.addEventListener('new_message', async (ev) => {
       const data = JSON.parse(ev.data);
-      const isIncoming = data.message.sender !== state.me.username;
+      const isSystem = data.message.kind === 'system' || data.message.sender === 'system';
+      const isIncoming = !isSystem && data.message.sender !== state.me.username;
       const senderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
       const senderAvatarUrl = (data.senderProfile && data.senderProfile.avatarUrl) || '';
       const senderAvatarColor = (data.senderProfile && data.senderProfile.avatarColor) || '';
-      const bodyPreview = data.message.text
-        ? data.message.text.slice(0, 120)
-        : (data.message.attachments && data.message.attachments[0]
-          ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
-          : 'New message');
+      const bodyPreview = data.message.kind === 'game'
+        ? `🎮 ${(data.message.game && data.message.game.title) || 'Mini-Game'}`
+        : (data.message.text
+          ? data.message.text.slice(0, 120)
+          : (data.message.attachments && data.message.attachments[0]
+            ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
+            : 'New message'));
 
       if (data.chatId === state.activeChatId) {
         const wasNearBottom = isNearBottom();
@@ -2091,11 +2262,14 @@
           if (isIncoming && !wasNearBottom) {
             state.unreadBelowCount = (state.unreadBelowCount || 0) + 1;
             if (!state.firstUnreadMsgId) state.firstUnreadMsgId = data.message.id;
-          } else if (!isIncoming) {
+          } else if (!isIncoming && !isSystem) {
             state.firstUnreadMsgId = null;
           }
           renderMessages(wasNearBottom);
           if (state.infoOpen) renderInfoDrawer();
+          if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onNewMessage === 'function') {
+            window.VibeRoomFeatures.onNewMessage(data.chatId, data.message);
+          }
         }
         if (isIncoming) {
           playChime('receive');
@@ -2165,6 +2339,9 @@
       if (idx >= 0) {
         state.messages[idx] = data.message;
         renderMessages(false);
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onMessageUpdated === 'function') {
+          window.VibeRoomFeatures.onMessageUpdated(data.chatId, data.message);
+        }
       }
     });
 
@@ -2177,6 +2354,60 @@
       }
       await refreshChats();
     });
+
+    es.addEventListener('chat_updated', async (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.chat && data.chatId) {
+        const idx = state.chats.findIndex((c) => c.id === data.chatId);
+        if (idx >= 0) state.chats[idx] = { ...state.chats[idx], ...data.chat };
+        else state.chats.unshift(data.chat);
+        if (state.activeChatId === data.chatId && state.activeRoom) {
+          state.activeRoom = data.chat;
+          renderAvatar(els.chatPeerAvatar, { displayName: data.chat.title, avatarColor: data.chat.avatarColor || 'var(--accent)' });
+          els.chatPeerName.textContent = data.chat.title || 'Room';
+          syncComposerAccessForActiveChat();
+          updateChatHeaderStatus();
+          if (state.infoOpen) renderInfoDrawer();
+        }
+        renderSidebar();
+      } else {
+        await refreshChats();
+      }
+    });
+
+    es.addEventListener('chat_removed', (ev) => {
+      const data = JSON.parse(ev.data);
+      if (!data.chatId) return;
+      state.chats = state.chats.filter((c) => c.id !== data.chatId);
+      if (state.activeChatId === data.chatId) {
+        state.activeChatId = null;
+        state.activePeer = null;
+        state.activeRoom = null;
+        state.messages = [];
+        els.activeChat.classList.add('hidden');
+        els.chatEmptyState.classList.remove('hidden');
+        els.appShell.classList.remove('mobile-chat-open');
+        toggleInfoDrawer(false);
+      }
+      renderSidebar();
+    });
+
+    const forwardFeatureEvents = [
+      'stranger_matched', 'stranger_message', 'stranger_typing',
+      'stranger_ended', 'stranger_reveal_requested', 'stranger_revealed',
+      'call_incoming', 'call_accepted', 'call_signal', 'call_declined', 'call_ended'
+    ];
+    for (const evtName of forwardFeatureEvents) {
+      es.addEventListener(evtName, (ev) => {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onSseEvent === 'function') {
+          try {
+            window.VibeRoomFeatures.onSseEvent(evtName, JSON.parse(ev.data));
+          } catch {
+            // Ignore malformed SSE payload
+          }
+        }
+      });
+    }
 
     es.addEventListener('profile_updated', async (ev) => {
       const data = JSON.parse(ev.data);
@@ -2445,7 +2676,11 @@
       state.chats = [];
       state.activeChatId = null;
       state.activePeer = null;
+      state.activeRoom = null;
       state.messages = [];
+      if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onLogout === 'function') {
+        window.VibeRoomFeatures.onLogout();
+      }
       els.activeChat.classList.add('hidden');
       els.chatEmptyState.classList.remove('hidden');
       showAuthScreen();
@@ -2632,17 +2867,21 @@
     }
 
     // Sidebar click & keyboard delegation
-    els.sidebarList.addEventListener('click', (e) => {
-      const row = e.target.closest('[data-open-user]');
+    function openChatFromSidebarRow(row) {
       if (!row) return;
-      openChatWithUser(row.dataset.openUser);
+      if (row.dataset.openChat) openRoomById(row.dataset.openChat);
+      else if (row.dataset.openUser) openChatWithUser(row.dataset.openUser);
+    }
+    els.sidebarList.addEventListener('click', (e) => {
+      const row = e.target.closest('[data-open-chat], [data-open-user]');
+      openChatFromSidebarRow(row);
     });
     els.sidebarList.addEventListener('keydown', (e) => {
-      const row = e.target.closest('.chat-row[data-open-user]');
+      const row = e.target.closest('.chat-row[data-open-chat], .chat-row[data-open-user]');
       if (!row) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        openChatWithUser(row.dataset.openUser);
+        openChatFromSidebarRow(row);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         const next = row.nextElementSibling;
@@ -2659,6 +2898,8 @@
       saveCurrentChatScroll();
       els.appShell.classList.remove('mobile-chat-open');
       state.activeChatId = null;
+      state.activePeer = null;
+      state.activeRoom = null;
       syncAndroidState();
       renderSidebar();
     });
@@ -3045,9 +3286,26 @@
         return;
       }
 
+      const gameTrigger = e.target.closest('[data-open-game]');
+      if (gameTrigger && state.activeChatId) {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.openGameById === 'function') {
+          window.VibeRoomFeatures.openGameById(gameTrigger.dataset.openGame);
+        }
+        return;
+      }
+
+      const mentionTag = e.target.closest('[data-mention]');
+      if (mentionTag) {
+        const targetUsername = mentionTag.dataset.mention;
+        if (targetUsername && (!state.me || targetUsername.toLowerCase() !== state.me.username)) {
+          await openChatWithUser(targetUsername.toLowerCase());
+        }
+        return;
+      }
+
       // On desktop websites (fine pointer, non-Android), left-clicking a message bubble opens the action + reaction menu
       if (!isMobileTouchMode() && e.button === 0 && e.currentTarget === els.messagesList) {
-        if (e.target.closest('a, button, video, audio, .msg-actions')) return;
+        if (e.target.closest('a, button, video, audio, .msg-actions, .game-card-msg, .mention-tag')) return;
         const selected = typeof window.getSelection === 'function' ? String(window.getSelection() || '').trim() : '';
         if (selected.length > 0) return;
         const bubble = e.target.closest('.msg-bubble');
@@ -3469,12 +3727,19 @@
           ? 0
           : (curIdx + delta + state.chats.length) % state.chats.length;
         const nextChat = state.chats[nextIdx];
-        if (nextChat && nextChat.peer) {
-          openChatWithUser(nextChat.peer.username);
+        if (nextChat) {
+          if (nextChat.type === 'group' || nextChat.type === 'channel') {
+            openRoomById(nextChat.id);
+          } else if (nextChat.peer) {
+            openChatWithUser(nextChat.peer.username);
+          }
         }
         return;
       }
       if (e.key === 'Escape') {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.handleEscape === 'function') {
+          if (window.VibeRoomFeatures.handleEscape()) return;
+        }
         if (els.msgContextOverlay && !els.msgContextOverlay.classList.contains('hidden')) {
           closeMessageContextMenu();
           return;
@@ -3485,6 +3750,7 @@
         closeDrawer();
         closeChatSearch();
         els.emojiPopover.classList.add('hidden');
+        if (els.mentionPopover) els.mentionPopover.classList.add('hidden');
         if (state.replyTo) clearReply();
       }
     });
@@ -3498,6 +3764,9 @@
     syncAndroidState(true);
     connectRealtime();
     await refreshChats();
+    if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onAuthenticated === 'function') {
+      await window.VibeRoomFeatures.onAuthenticated(user);
+    }
     if (state.queuedAndroidShare) {
       const queued = state.queuedAndroidShare;
       state.queuedAndroidShare = null;
@@ -3559,6 +3828,9 @@
     updateAppUpdateUI();
   };
   window.__telechatHandleBack = () => {
+    if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.handleEscape === 'function') {
+      if (window.VibeRoomFeatures.handleEscape()) return true;
+    }
     if (els.msgContextOverlay && !els.msgContextOverlay.classList.contains('hidden')) { closeMessageContextMenu(); return true; }
     if (!els.lightboxModal.classList.contains('hidden')) { closeLightbox(); return true; }
     if (!els.settingsModal.classList.contains('hidden')) {
@@ -3576,6 +3848,8 @@
       saveCurrentChatScroll();
       els.appShell.classList.remove('mobile-chat-open');
       state.activeChatId = null;
+      state.activePeer = null;
+      state.activeRoom = null;
       syncAndroidState();
       renderSidebar();
       return true;
@@ -3585,6 +3859,26 @@
       return true;
     }
     return false;
+  };
+
+  window.VibeRoomCore = {
+    getState: () => state,
+    getEls: () => els,
+    api,
+    openChatWithUser,
+    openRoomById,
+    refreshChats,
+    renderSidebar,
+    renderMessages,
+    renderInfoDrawer,
+    toggleInfoDrawer,
+    closeDrawer,
+    showToast,
+    renderAvatar,
+    initialsFor,
+    escapeHtml,
+    formatTime,
+    saveChatDraft
   };
 
   document.addEventListener('visibilitychange', () => {

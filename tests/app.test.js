@@ -637,10 +637,11 @@ test('full user registration, folder storage, search, chat logs, and image/file 
   assert.equal(clearBirthdayRes.body.user.birthday, null);
 });
 
-test('frontend app.js boots cleanly and matches all HTML element IDs', async () => {
+test('frontend app.js and features.js boot cleanly and match HTML element IDs', async () => {
   const rootDir = path.resolve(__dirname, '..');
   const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
   const js = fs.readFileSync(path.join(rootDir, 'public', 'app.js'), 'utf8');
+  const featuresJs = fs.readFileSync(path.join(rootDir, 'public', 'features.js'), 'utf8');
 
   const combined = `${html}\n${js}`;
   const missingIds = [];
@@ -650,6 +651,16 @@ test('frontend app.js boots cleanly and matches all HTML element IDs', async () 
     }
   }
   assert.deepEqual(missingIds, []);
+
+  // Verify static HTML IDs referenced via el('...') in features.js exist in index.html or features.js template strings
+  const combinedFeat = `${html}\n${featuresJs}`;
+  const missingFeatureIds = [];
+  for (const m of featuresJs.matchAll(/\bel\('([^']+)'\)/g)) {
+    if (!combinedFeat.includes(`id="${m[1]}"`)) {
+      missingFeatureIds.push(m[1]);
+    }
+  }
+  assert.deepEqual(missingFeatureIds, []);
 
   let authScreenShown = false;
   const elements = new Map();
@@ -677,6 +688,7 @@ test('frontend app.js boots cleanly and matches all HTML element IDs', async () 
       },
       addEventListener() {},
       setAttribute() {},
+      querySelector() { return null; },
       querySelectorAll() { return []; },
       style: { setProperty() {} },
       value: '',
@@ -695,6 +707,7 @@ test('frontend app.js boots cleanly and matches all HTML element IDs', async () 
         if (!elements.has(id)) elements.set(id, makeEl(id));
         return elements.get(id);
       },
+      querySelector() { return null; },
       querySelectorAll() { return []; },
       addEventListener() {}
     },
@@ -711,12 +724,16 @@ test('frontend app.js boots cleanly and matches all HTML element IDs', async () 
     clearTimeout,
     setInterval,
     clearInterval,
-    URL
+    URL,
+    URLSearchParams
   };
 
   vm.runInNewContext(js, sandbox);
+  vm.runInNewContext(featuresJs, sandbox);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(authScreenShown, true);
+  assert.equal(typeof sandbox.window.VibeRoomCore, 'object');
+  assert.equal(typeof sandbox.window.VibeRoomFeatures, 'object');
 });
 
 test('oversized avatar upload returns clean HTTP 413 without destroying socket', async (t) => {
@@ -769,4 +786,331 @@ test('oversized avatar upload returns clean HTTP 413 without destroying socket',
   stream.end();
   await assert.rejects(bodyPromise, (err) => err && err.statusCode === 413);
   assert.equal(stream.destroyed, false);
+});
+
+async function registerTestUser(handleRequest, username, email) {
+  const reg = await invokeRouter(handleRequest, '/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, email, password: 'Password123!' })
+  });
+  assert.equal(reg.status, 202);
+  const ver = await invokeRouter(handleRequest, '/api/auth/verify-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verificationId: reg.body.verificationId, code: reg.body.devCode })
+  });
+  assert.equal(ver.status, 201);
+  return { user: ver.body.user, cookie: ver.cookie };
+}
+
+test('groups & channels lifecycle, invite links, @mentions, and admin controls', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-groups-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_g', 'alice.g@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_g', 'bob.g@gmail.com');
+  const carol = await registerTestUser(handleRequest, 'carol_g', 'carol.g@gmail.com');
+
+  // Create group
+  const grpRes = await invokeRouter(handleRequest, '/api/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ type: 'group', title: 'Gamers United', description: 'Chill room', members: ['bob_g'] })
+  });
+  assert.equal(grpRes.status, 201);
+  const group = grpRes.body.chat;
+  assert.equal(group.type, 'group');
+  assert.deepEqual(group.participants.slice().sort(), ['alice_g', 'bob_g']);
+
+  // Carol joins by inviteCode
+  const joinRes = await invokeRouter(handleRequest, '/api/groups/join', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: carol.cookie },
+    body: JSON.stringify({ inviteCode: group.inviteCode })
+  });
+  assert.equal(joinRes.status, 200);
+  assert.ok(joinRes.body.chat.participants.includes('carol_g'));
+
+  // Message with @mention
+  const msgRes = await invokeRouter(handleRequest, `/api/chats/${group.id}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Hey @carol_g and @alice_g ready?' })
+  });
+  assert.equal(msgRes.status, 201);
+  assert.deepEqual(msgRes.body.message.mentions, ['carol_g', 'alice_g']);
+
+  // Promote Bob, remove Carol
+  const promoRes = await invokeRouter(handleRequest, `/api/groups/${group.id}/admins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ username: 'bob_g', isAdmin: true })
+  });
+  assert.equal(promoRes.status, 200);
+  assert.ok(promoRes.body.chat.admins.includes('bob_g'));
+
+  const kickRes = await invokeRouter(handleRequest, `/api/groups/${group.id}/members/carol_g`, {
+    method: 'DELETE',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(kickRes.status, 200);
+  assert.equal(kickRes.body.chat.participants.includes('carol_g'), false);
+
+  // Broadcast channel: non-admin cannot post
+  const chnRes = await invokeRouter(handleRequest, '/api/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ type: 'channel', title: 'VibeRoom News', members: ['bob_g'] })
+  });
+  assert.equal(chnRes.status, 201);
+  const channel = chnRes.body.chat;
+
+  const bobPostRes = await invokeRouter(handleRequest, `/api/chats/${channel.id}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Unauthorized post' })
+  });
+  assert.equal(bobPostRes.status, 403);
+
+  const alicePostRes = await invokeRouter(handleRequest, `/api/chats/${channel.id}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Official announcement!' })
+  });
+  assert.equal(alicePostRes.status, 201);
+});
+
+test('stranger lounge matching, anonymity protection, and mutual reveal flow', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-stranger-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_s', 'alice.s@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_s', 'bob.s@gmail.com');
+
+  const q1 = await invokeRouter(handleRequest, '/api/stranger/meet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ interests: ['gaming', 'music'], language: 'en' })
+  });
+  assert.equal(q1.status, 200);
+  assert.equal(q1.body.status, 'searching');
+
+  const q2 = await invokeRouter(handleRequest, '/api/stranger/meet', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ interests: ['gaming'], language: 'en' })
+  });
+  assert.equal(q2.status, 200);
+  assert.equal(q2.body.status, 'matched');
+  assert.match(q2.body.session.myAlias, /^Ghost #\d+$/);
+  assert.match(q2.body.session.partnerAlias, /^Ghost #\d+$/);
+  assert.deepEqual(q2.body.session.sharedInterests, ['gaming']);
+
+  // Anonymity check: Alice checks status and sees only Ghost aliases, never bob_s
+  const aliceStatus = await invokeRouter(handleRequest, '/api/stranger/status', {
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(aliceStatus.status, 200);
+  assert.equal(aliceStatus.body.status, 'matched');
+  assert.equal(JSON.stringify(aliceStatus.body).includes('bob_s'), false);
+
+  // Send message inside stranger lounge
+  const sendStr = await invokeRouter(handleRequest, '/api/stranger/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Hey Ghost!' })
+  });
+  assert.equal(sendStr.status, 201);
+  assert.equal(sendStr.body.message.text, 'Hey Ghost!');
+  assert.equal(sendStr.body.message.isMine, true);
+
+  // Single reveal keeps revealed=false until mutual
+  const r1 = await invokeRouter(handleRequest, '/api/stranger/reveal', {
+    method: 'POST',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(r1.status, 200);
+  assert.equal(r1.body.revealed, false);
+
+  const r2 = await invokeRouter(handleRequest, '/api/stranger/reveal', {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(r2.status, 200);
+  assert.equal(r2.body.revealed, true);
+  assert.equal(r2.body.friend.username, 'alice_s');
+  assert.equal(r2.body.dmChatId, 'dm_alice_s__bob_s');
+});
+
+test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call signaling', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-games-calls-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_p', 'alice.p@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_p', 'bob.p@gmail.com');
+
+  const dmOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_p' })
+  });
+  assert.equal(dmOpen.status, 200);
+  const chatId = dmOpen.body.chat.id;
+
+  // 1. Tic-Tac-Toe win
+  const tttStart = await invokeRouter(handleRequest, `/api/chats/${chatId}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ gameType: 'tictactoe' })
+  });
+  assert.equal(tttStart.status, 201);
+  const tttId = tttStart.body.message.game.id;
+
+  const tttMoves = [
+    [alice.cookie, 0], [bob.cookie, 3],
+    [alice.cookie, 1], [bob.cookie, 4],
+    [alice.cookie, 2]
+  ];
+  let lastTtt;
+  for (const [ck, index] of tttMoves) {
+    lastTtt = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${tttId}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: ck },
+      body: JSON.stringify({ move: { index } })
+    });
+    assert.equal(lastTtt.status, 200);
+  }
+  assert.equal(lastTtt.body.message.game.status, 'finished');
+  assert.equal(lastTtt.body.message.game.winner, 'alice_p');
+
+  // 2. Connect 4 win
+  const c4Start = await invokeRouter(handleRequest, `/api/chats/${chatId}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ gameType: 'connect4' })
+  });
+  assert.equal(c4Start.status, 201);
+  const c4Id = c4Start.body.message.game.id;
+
+  let lastC4;
+  for (const [ck, col] of [
+    [alice.cookie, 0], [bob.cookie, 1],
+    [alice.cookie, 0], [bob.cookie, 1],
+    [alice.cookie, 0], [bob.cookie, 1],
+    [alice.cookie, 0]
+  ]) {
+    lastC4 = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${c4Id}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: ck },
+      body: JSON.stringify({ move: { col } })
+    });
+    assert.equal(lastC4.status, 200);
+  }
+  assert.equal(lastC4.body.message.game.status, 'finished');
+  assert.equal(lastC4.body.message.game.winner, 'alice_p');
+
+  // 3. Chess legal move + illegal rejection
+  const chessStart = await invokeRouter(handleRequest, `/api/chats/${chatId}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ gameType: 'chess' })
+  });
+  assert.equal(chessStart.status, 201);
+  const chessId = chessStart.body.message.game.id;
+
+  // Illegal pawn jump 3 rows forward
+  const badChess = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${chessId}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ move: { from: 52, to: 28 } })
+  });
+  assert.equal(badChess.status, 400);
+
+  // Legal e2 -> e4 (52 -> 36)
+  const goodChess = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${chessId}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ move: { from: 52, to: 36 } })
+  });
+  assert.equal(goodChess.status, 200);
+  assert.equal(goodChess.body.message.game.state.board[36], 'P');
+  assert.equal(goodChess.body.message.game.turn, 'bob_p');
+
+  // 4. Word Duel hides secret while active and reveals after guesses/win
+  const wgStart = await invokeRouter(handleRequest, `/api/chats/${chatId}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ gameType: 'wordguess' })
+  });
+  assert.equal(wgStart.status, 201);
+  assert.equal(wgStart.body.message.game.state.revealedWord, null);
+  const wgId = wgStart.body.message.game.id;
+
+  const wgGuess = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${wgId}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ move: { word: 'APPLE' } })
+  });
+  assert.equal(wgGuess.status, 200);
+  assert.equal(wgGuess.body.message.game.state.guesses.length, 1);
+
+  // 5. WebRTC Call Signaling flow
+  const cfgRes = await invokeRouter(handleRequest, '/api/calls/config', {
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(cfgRes.status, 200);
+  assert.ok(Array.isArray(cfgRes.body.iceServers));
+
+  const callStart = await invokeRouter(handleRequest, '/api/calls/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_p', mode: 'video', chatId })
+  });
+  assert.equal(callStart.status, 201);
+  const callId = callStart.body.call.id;
+
+  const callAccept = await invokeRouter(handleRequest, `/api/calls/${callId}/accept`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(callAccept.status, 200);
+
+  const sigRes = await invokeRouter(handleRequest, `/api/calls/${callId}/signal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ type: 'offer', data: { type: 'offer', sdp: 'v=0...' } })
+  });
+  assert.equal(sigRes.status, 200);
+
+  const endRes = await invokeRouter(handleRequest, `/api/calls/${callId}/end`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ reason: 'hangup' })
+  });
+  assert.equal(endRes.status, 200);
 });

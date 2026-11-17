@@ -45,7 +45,9 @@ import java.util.regex.Pattern;
 public class MessageService extends Service {
 
     public static final String CHANNEL_MESSAGES = "telechat_messages_v2";
+    public static final String CHANNEL_CALLS = "viberoom_calls";
     public static final String EXTRA_CHAT_ID = "extra_chat_id";
+    private static final int CALL_NOTIF_ID = 303;
     private static final int LEGACY_FOREGROUND_ID = 101;
     private static final String LEGACY_SERVICE_CHANNEL = "telechat_service";
     private static final String PREFS_NOTIF = "telechat_notif_prefs";
@@ -233,6 +235,22 @@ public class MessageService extends Service {
                 }
                 return;
             }
+            if ("call_ended".equals(eventName) || "call_declined".equals(eventName) || "call_accepted".equals(eventName)) {
+                NotificationManager mgr = getSystemService(NotificationManager.class);
+                if (mgr != null) mgr.cancel(CALL_NOTIF_ID);
+                return;
+            }
+            if ("call_incoming".equals(eventName)) {
+                if (appInForeground) return;
+                JSONObject obj = new JSONObject(jsonStr);
+                JSONObject call = obj.optJSONObject("call");
+                JSONObject caller = obj.optJSONObject("callerProfile");
+                String callerName = caller != null ? caller.optString("displayName", call != null ? call.optString("caller", "Someone") : "Someone") : "Someone";
+                String mode = call != null ? call.optString("mode", "audio") : "audio";
+                String chatId = call != null ? call.optString("chatId", "") : "";
+                showIncomingCallNotification(this, callerName, mode, chatId);
+                return;
+            }
             if (!"new_message".equals(eventName)) return;
 
             JSONObject obj = new JSONObject(jsonStr);
@@ -289,7 +307,58 @@ public class MessageService extends Service {
             msgChannel.enableVibration(true);
             msgChannel.enableLights(true);
             manager.createNotificationChannel(msgChannel);
+
+            NotificationChannel callChannel = new NotificationChannel(
+                CHANNEL_CALLS,
+                "Incoming Calls",
+                NotificationManager.IMPORTANCE_HIGH
+            );
+            callChannel.setDescription("Incoming voice and video call alerts");
+            callChannel.enableVibration(true);
+            callChannel.enableLights(true);
+            manager.createNotificationChannel(callChannel);
         }
+    }
+
+    private static void showIncomingCallNotification(Context ctx, String callerName, String mode, String chatId) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                return;
+            }
+        }
+        NotificationManager manager = ctx.getSystemService(NotificationManager.class);
+        if (manager == null) return;
+
+        Intent openIntent = new Intent(ctx, MainActivity.class);
+        openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        if (chatId != null && !chatId.isEmpty()) {
+            openIntent.putExtra(EXTRA_CHAT_ID, chatId);
+        }
+
+        PendingIntent pi = PendingIntent.getActivity(
+            ctx,
+            CALL_NOTIF_ID,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+
+        String label = "video".equalsIgnoreCase(mode) ? "Incoming video call" : "Incoming voice call";
+        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            ? new Notification.Builder(ctx, CHANNEL_CALLS)
+            : new Notification.Builder(ctx);
+
+        builder.setSmallIcon(R.drawable.ic_stat_telechat)
+            .setContentTitle(callerName)
+            .setContentText(label + " — Tap to answer")
+            .setAutoCancel(true)
+            .setCategory(Notification.CATEGORY_CALL)
+            .setContentIntent(pi);
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            builder.setPriority(Notification.PRIORITY_MAX);
+        }
+
+        manager.notify(CALL_NOTIF_ID, builder.build());
     }
 
     private static Bitmap fetchAvatarBitmap(Context ctx, String avatarUrl) {

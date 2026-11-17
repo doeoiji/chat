@@ -176,6 +176,42 @@
           </span>
           <span>Find People</span>
         </button>
+        <button id="menu-stranger" class="drawer-item" type="button">
+          <span class="drawer-item-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a7 7 0 0 0-7 7v11l2.5-2 2.5 2 2-2 2 2 2.5-2L19 20V9a7 7 0 0 0-7-7z" />
+              <circle cx="9.5" cy="10" r="1" fill="currentColor" />
+              <circle cx="14.5" cy="10" r="1" fill="currentColor" />
+            </svg>
+          </span>
+          <span>Stranger Lounge</span>
+        </button>
+        <button id="menu-new-group" class="drawer-item" type="button">
+          <span class="drawer-item-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </span>
+          <span>New Group / Channel</span>
+        </button>
+        <button id="menu-games" class="drawer-item" type="button">
+          <span class="drawer-item-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="6" width="20" height="12" rx="4" />
+              <line x1="6" y1="12" x2="10" y2="12" />
+              <line x1="8" y1="10" x2="8" y2="14" />
+              <circle cx="15.5" cy="10.5" r="0.8" fill="currentColor" />
+              <circle cx="17.5" cy="13.5" r="0.8" fill="currentColor" />
+            </svg>
+          </span>
+          <span>Mini-Games</span>
+        </button>
         <button id="menu-edit-profile" class="drawer-item" type="button">
           <span class="drawer-item-icon">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
@@ -348,6 +384,29 @@
             </div>
           </div>
           <div class="chat-header-actions">
+            <button id="call-audio-btn" class="icon-btn" type="button" title="Voice Call" aria-label="Voice Call">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />
+              </svg>
+            </button>
+            <button id="call-video-btn" class="icon-btn" type="button" title="Video Call" aria-label="Video Call">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="23 7 16 12 23 17 23 7" />
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+              </svg>
+            </button>
+            <button id="open-games-btn" class="icon-btn" type="button" title="Play Mini-Game" aria-label="Play Mini-Game">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="6" width="20" height="12" rx="4" />
+                <line x1="6" y1="12" x2="10" y2="12" />
+                <line x1="8" y1="10" x2="8" y2="14" />
+                <circle cx="15.5" cy="10.5" r="0.8" fill="currentColor" />
+                <circle cx="17.5" cy="13.5" r="0.8" fill="currentColor" />
+              </svg>
+            </button>
             <button id="toggle-chat-search-btn" class="icon-btn" type="button" title="Search in chat"
               aria-label="Search in chat">
               <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
@@ -405,6 +464,10 @@
 
         <!-- Composer -->
         <footer class="composer-wrap">
+          <div id="mention-popover" class="mention-popover hidden"></div>
+          <div id="channel-readonly-bar" class="channel-readonly-bar hidden">
+            Broadcast Channel — Only admins can post messages
+          </div>
           <div id="reply-banner" class="reply-banner hidden">
             <div class="reply-banner-bar"></div>
             <div class="reply-banner-body">
@@ -462,7 +525,7 @@
     <!-- Right Info & Shared Media Panel -->
     <aside id="info-drawer" class="info-drawer hidden">
       <header class="info-header">
-        <span>User Info</span>
+        <span id="info-header-title">User Info</span>
         <button id="close-info-btn" class="icon-btn" type="button" aria-label="Close info panel">✕</button>
       </header>
       <div class="info-profile">
@@ -472,10 +535,10 @@
       </div>
       <div class="info-details">
         <div class="info-row">
-          <span class="info-label">Username</span>
+          <span class="info-label" id="info-username-label">Username</span>
           <span id="info-username" class="info-value"></span>
         </div>
-        <div class="info-row">
+        <div id="info-email-row" class="info-row">
           <span class="info-label">Email</span>
           <span id="info-email" class="info-value"></span>
         </div>
@@ -488,6 +551,7 @@
           <span id="info-birthday" class="info-value"></span>
         </div>
       </div>
+      <div id="info-room-controls" class="info-room-controls hidden"></div>
       <div class="info-tabs">
         <button id="info-tab-media" class="info-tab active" type="button">Media</button>
         <button id="info-tab-files" class="info-tab" type="button">Files</button>
@@ -861,10 +925,112 @@
     </div>
   </div>
 
+  <!-- Anonymous Random Chat ("Stranger Lounge") Modal -->
+  <div id="stranger-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="stranger-modal-title">
+    <div class="modal-backdrop" id="stranger-modal-backdrop"></div>
+    <div class="modal-card modal-card-wide stranger-card">
+      <div class="modal-header">
+        <div class="settings-header-left">
+          <span class="stranger-ghost-dot">👻</span>
+          <div>
+            <h3 id="stranger-modal-title">Stranger Lounge</h3>
+            <small id="stranger-header-sub" class="stranger-sub">Anonymous random chat</small>
+          </div>
+        </div>
+        <button id="stranger-modal-close" class="icon-btn" type="button" aria-label="Close Stranger Lounge">✕</button>
+      </div>
+      <div id="stranger-body" class="stranger-body"></div>
+    </div>
+  </div>
+
+  <!-- Create Group / Channel or Join Invite Modal -->
+  <div id="group-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
+    <div class="modal-backdrop" id="group-modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="group-modal-title">New Group / Channel</h3>
+        <button id="group-modal-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="group-modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Playable Mini-Games Modal (Hub + Live Board) -->
+  <div id="games-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="games-modal-title">
+    <div class="modal-backdrop" id="games-modal-backdrop"></div>
+    <div class="modal-card modal-card-wide games-card">
+      <div class="modal-header">
+        <h3 id="games-modal-title">Mini-Games</h3>
+        <button id="games-modal-close" class="icon-btn" type="button" aria-label="Close games">✕</button>
+      </div>
+      <div id="games-modal-body" class="modal-body games-modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Incoming Call Ring Overlay -->
+  <div id="call-ring-overlay" class="call-ring-overlay hidden" role="dialog" aria-modal="true">
+    <div class="call-ring-card">
+      <div id="call-ring-avatar" class="avatar avatar-xl call-pulse"></div>
+      <h3 id="call-ring-name">Incoming Call</h3>
+      <div id="call-ring-sub" class="call-ring-sub">Voice Call</div>
+      <div class="call-ring-actions">
+        <button id="call-decline-btn" class="call-circle-btn decline" type="button" title="Decline">✕</button>
+        <button id="call-accept-btn" class="call-circle-btn accept" type="button" title="Answer">✓</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active Call Stage Overlay -->
+  <div id="active-call-overlay" class="active-call-overlay hidden" role="dialog" aria-modal="true">
+    <div class="call-stage">
+      <div class="call-topbar">
+        <div class="call-peer-head">
+          <div id="call-stage-name" class="call-stage-name">Calling...</div>
+          <div id="call-stage-status" class="call-stage-status">Connecting...</div>
+        </div>
+        <button id="call-minimize-btn" class="icon-btn call-top-icon" type="button" title="Minimize to keep chatting" aria-label="Minimize call">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 14 10 14 10 20" />
+            <polyline points="20 10 14 10 14 4" />
+            <line x1="14" y1="10" x2="21" y2="3" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+        </button>
+      </div>
+      <div class="call-videos">
+        <video id="call-remote-video" class="call-remote-video" autoplay playsinline></video>
+        <div id="call-audio-placeholder" class="call-audio-placeholder">
+          <div id="call-stage-avatar" class="avatar avatar-xl"></div>
+        </div>
+        <video id="call-local-video" class="call-local-video hidden" autoplay muted playsinline></video>
+      </div>
+      <div class="call-controls">
+        <button id="call-mute-btn" class="call-ctrl-btn" type="button" title="Mute / Unmute">🎤</button>
+        <button id="call-cam-btn" class="call-ctrl-btn" type="button" title="Toggle Camera">📷</button>
+        <button id="call-flip-btn" class="call-ctrl-btn" type="button" title="Switch Camera">🔄</button>
+        <button id="call-hangup-btn" class="call-ctrl-btn hangup" type="button" title="End Call">📞</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Floating Mini-Player (allows texting during call) -->
+  <div id="call-mini-player" class="call-mini-player hidden">
+    <div id="call-mini-expand" class="call-mini-info" role="button" tabindex="0">
+      <span class="call-mini-dot"></span>
+      <div class="call-mini-meta">
+        <strong id="call-mini-name">On Call</strong>
+        <span id="call-mini-timer">00:00</span>
+      </div>
+    </div>
+    <button id="call-mini-mute" class="icon-btn-sm" type="button" title="Mute / Unmute">🎤</button>
+    <button id="call-mini-hangup" class="call-mini-hangup" type="button" title="End Call">✕</button>
+  </div>
+
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
   <script src="/app.js?v=2"></script>
+  <script src="/features.js?v=1"></script>
 </body>
 
 </html>

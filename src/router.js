@@ -4,6 +4,10 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { parseMultipart, readBodyBuffer } = require('./multipart');
 const { createMailer } = require('./mailer');
+const { createGroupService } = require('./groups');
+const { createStrangerService } = require('./stranger');
+const { createGamesService } = require('./games');
+const { createCallsService } = require('./calls');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -60,6 +64,10 @@ async function readJsonBody(req, maxBytes = 1024 * 1024) {
 
 function createRouter({ config, auth, storage, hub, mailer }) {
   const mailService = mailer || createMailer(config);
+  const groups = createGroupService({ config, storage });
+  const stranger = createStrangerService({ hub, storage });
+  const games = createGamesService({ storage });
+  const calls = createCallsService({ hub, storage });
   async function requireAuth(req, res) {
     const session = auth.getSessionUser(req);
     if (!session) {
@@ -109,14 +117,16 @@ function createRouter({ config, auth, storage, hub, mailer }) {
       const mime = MIME_TYPES[ext] || 'application/octet-stream';
 
       if (cleanPath === '/index.html') {
-        const [cssVer, jsVer, rawHtml] = await Promise.all([
+        const [cssVer, jsVer, featVer, rawHtml] = await Promise.all([
           getAssetVersion(publicRoot, 'styles.css'),
           getAssetVersion(publicRoot, 'app.js'),
+          getAssetVersion(publicRoot, 'features.js'),
           fsp.readFile(targetPath, 'utf8')
         ]);
         const versionedHtml = rawHtml
           .replace(/\/styles\.css(?:\?v=[^"']*)?/g, `/styles.css?v=${cssVer}`)
-          .replace(/\/app\.js(?:\?v=[^"']*)?/g, `/app.js?v=${jsVer}`);
+          .replace(/\/app\.js(?:\?v=[^"']*)?/g, `/app.js?v=${jsVer}`)
+          .replace(/\/features\.js(?:\?v=[^"']*)?/g, `/features.js?v=${featVer}`);
         const buf = Buffer.from(versionedHtml, 'utf8');
         res.writeHead(200, {
           'Content-Type': mime,
@@ -327,23 +337,28 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         return sendJson(res, 200, { users: users.map(enrichUser) });
       }
 
-      // List active chats
+      // List active chats (DMs, Groups, and Channels)
       if (method === 'GET' && pathname === '/api/chats') {
         const me = await requireAuth(req, res);
         if (!me) return;
         const chats = await storage.listChatsForUser(me.username);
         const enriched = chats.map((c) => ({
           ...c,
-          peer: enrichUser(c.peer)
+          peer: c.peer ? enrichUser(c.peer) : null
         }));
         return sendJson(res, 200, { chats: enriched });
       }
 
-      // Open or preview a direct chat with another user (does not create folder until first message)
+      // Open or preview a DM chat OR open an existing group/channel
       if (method === 'POST' && pathname === '/api/chats/open') {
         const me = await requireAuth(req, res);
         if (!me) return;
         const body = await readJsonBody(req);
+        if (body.chatId && groups.isGroupOrChannelId(body.chatId)) {
+          const opened = await groups.openRoom(body.chatId, me.username);
+          return sendJson(res, 200, opened);
+        }
+
         const targetUsername = String(body.targetUsername || '').trim().toLowerCase();
         if (!targetUsername || targetUsername === me.username) {
           return sendJson(res, 400, { error: 'Invalid target user.' });
@@ -404,7 +419,7 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         return sendJson(res, 200, { meta, messages, exists: true });
       }
 
-      // Send message (text and/or images/files). Creates chat folder if first message!
+      // Send message (text, images/files) in DM, Group, or Channel
       if (method === 'POST' && chatMsgsMatch) {
         const me = await requireAuth(req, res);
         if (!me) return;
@@ -413,11 +428,6 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         if (!storage.CHAT_ID_REGEX.test(chatId)) {
           return sendJson(res, 400, { error: 'Invalid chat ID.' });
         }
-        const parts = chatId.slice(3).split('__');
-        if (!parts.includes(me.username)) {
-          return sendJson(res, 403, { error: 'Forbidden.' });
-        }
-        const peerUsername = parts.find((p) => p !== me.username) || parts[0];
 
         let text = '';
         let replyToId = null;
@@ -436,8 +446,20 @@ function createRouter({ config, auth, storage, hub, mailer }) {
           replyToId = body.replyToId || null;
         }
 
-        // Ensure chat folder exists now that users are chatting
-        await storage.ensureChatFolder(me.username, peerUsername);
+        if (groups.isGroupOrChannelId(chatId)) {
+          const existingMeta = await storage.getChatMeta(chatId);
+          if (!existingMeta || !existingMeta.participants.includes(me.username)) {
+            return sendJson(res, 404, { error: 'Room not found.' });
+          }
+        } else {
+          const parts = chatId.slice(3).split('__');
+          if (!parts.includes(me.username)) {
+            return sendJson(res, 403, { error: 'Forbidden.' });
+          }
+          const peerUsername = parts.find((p) => p !== me.username) || parts[0];
+          await storage.ensureChatFolder(me.username, peerUsername);
+        }
+
         const { message, meta } = await storage.appendChatMessage(chatId, me.username, {
           text,
           files,
@@ -474,7 +496,7 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         return sendJson(res, 200, { ok: true, newlyReadIds: result.newlyReadIds });
       }
 
-      // Typing indicator
+      // Typing indicator (supports DM & Group)
       const typingMatch = /^\/api\/chats\/([^/]+)\/typing$/.exec(pathname);
       if (method === 'POST' && typingMatch) {
         const me = await requireAuth(req, res);
@@ -483,12 +505,21 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         if (!storage.CHAT_ID_REGEX.test(chatId)) {
           return sendJson(res, 400, { error: 'Invalid chat ID.' });
         }
-        const parts = chatId.slice(3).split('__');
-        if (!parts.includes(me.username)) return sendJson(res, 403, { error: 'Forbidden.' });
-        const peerUsername = parts.find((p) => p !== me.username);
         const body = await readJsonBody(req);
-        if (peerUsername) {
-          hub.emitToUser(peerUsername, 'typing', {
+        let recipients = [];
+        if (groups.isGroupOrChannelId(chatId)) {
+          const meta = await storage.getChatMeta(chatId);
+          if (!meta || !meta.participants.includes(me.username)) {
+            return sendJson(res, 403, { error: 'Forbidden.' });
+          }
+          recipients = meta.participants.filter((p) => p !== me.username);
+        } else {
+          const parts = chatId.slice(3).split('__');
+          if (!parts.includes(me.username)) return sendJson(res, 403, { error: 'Forbidden.' });
+          recipients = parts.filter((p) => p !== me.username);
+        }
+        if (recipients.length > 0) {
+          hub.emitToUsers(recipients, 'typing', {
             chatId,
             username: me.username,
             isTyping: Boolean(body.isTyping)
@@ -542,6 +573,223 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         return serveBinaryFile(res, filePath, originalName, forceDownload);
       }
 
+      // ===================================================================
+      // Group Chats & Channels
+      // ===================================================================
+      if (method === 'POST' && pathname === '/api/groups') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const chat = await groups.createGroupOrChannel({
+          creator: me.username,
+          type: body.type,
+          title: body.title,
+          description: body.description,
+          memberUsernames: body.members
+        });
+        hub.emitToUsers(chat.participants, 'chat_updated', { chatId: chat.id, chat });
+        return sendJson(res, 201, { chat });
+      }
+
+      if (method === 'POST' && pathname === '/api/groups/join') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const result = await groups.joinByInvite(body.inviteCode, me.username);
+        hub.emitToUsers(result.chat.participants, 'chat_updated', { chatId: result.chat.id, chat: result.chat });
+        return sendJson(res, 200, result);
+      }
+
+      const groupPatchMatch = /^\/api\/groups\/([^/]+)$/.exec(pathname);
+      if (method === 'PATCH' && groupPatchMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const chat = await groups.updateRoom(groupPatchMatch[1], me.username, body);
+        hub.emitToUsers(chat.participants, 'chat_updated', { chatId: chat.id, chat });
+        return sendJson(res, 200, { chat });
+      }
+
+      const groupMemberAddMatch = /^\/api\/groups\/([^/]+)\/members$/.exec(pathname);
+      if (method === 'POST' && groupMemberAddMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const chat = await groups.addMember(groupMemberAddMatch[1], me.username, body.username);
+        hub.emitToUsers(chat.participants, 'chat_updated', { chatId: chat.id, chat });
+        return sendJson(res, 200, { chat });
+      }
+
+      const groupMemberDelMatch = /^\/api\/groups\/([^/]+)\/members\/([^/]+)$/.exec(pathname);
+      if (method === 'DELETE' && groupMemberDelMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, targetUsername] = groupMemberDelMatch;
+        const resDel = await groups.removeMember(chatId, me.username, targetUsername);
+        if (resDel.chat && Array.isArray(resDel.chat.participants)) {
+          hub.emitToUsers(resDel.chat.participants, 'chat_updated', { chatId, chat: resDel.chat });
+        }
+        hub.emitToUser(resDel.removedUsername, 'chat_removed', { chatId });
+        return sendJson(res, 200, { chat: resDel.chat, ok: true });
+      }
+
+      const groupAdminsMatch = /^\/api\/groups\/([^/]+)\/admins$/.exec(pathname);
+      if (method === 'POST' && groupAdminsMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const chat = await groups.setMemberAdmin(
+          groupAdminsMatch[1],
+          me.username,
+          body.username,
+          Boolean(body.isAdmin)
+        );
+        hub.emitToUsers(chat.participants, 'chat_updated', { chatId: chat.id, chat });
+        return sendJson(res, 200, { chat });
+      }
+
+      // ===================================================================
+      // Playable Chat Mini-Games
+      // ===================================================================
+      const gameCreateMatch = /^\/api\/chats\/([^/]+)\/games$/.exec(pathname);
+      if (method === 'POST' && gameCreateMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const chatId = gameCreateMatch[1];
+        const body = await readJsonBody(req);
+        if (!groups.isGroupOrChannelId(chatId)) {
+          const parts = chatId.startsWith('dm_') ? chatId.slice(3).split('__') : [];
+          if (parts.length === 2 && parts.includes(me.username)) {
+            const peer = parts.find((p) => p !== me.username) || parts[0];
+            await storage.ensureChatFolder(me.username, peer);
+          }
+        }
+        const { message, meta } = await games.createGame({
+          chatId,
+          creatorUsername: me.username,
+          gameType: body.gameType,
+          opponentUsername: body.opponentUsername
+        });
+        hub.emitToUsers(meta.participants, 'new_message', {
+          chatId,
+          message,
+          meta,
+          senderProfile: enrichUser(me)
+        });
+        return sendJson(res, 201, { message, meta });
+      }
+
+      const gameMoveMatch = /^\/api\/chats\/([^/]+)\/games\/([^/]+)\/move$/.exec(pathname);
+      if (method === 'POST' && gameMoveMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, gameId] = gameMoveMatch;
+        const body = await readJsonBody(req);
+        const { message, meta } = await games.makeMove({
+          chatId,
+          gameId,
+          playerUsername: me.username,
+          move: body.move || body
+        });
+        hub.emitToUsers(meta.participants, 'message_updated', {
+          chatId,
+          message
+        });
+        return sendJson(res, 200, { message });
+      }
+
+      // ===================================================================
+      // Anonymous Random Chat ("Stranger Lounge")
+      // ===================================================================
+      if (method === 'GET' && pathname === '/api/stranger/status') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        return sendJson(res, 200, stranger.getStatus(me.username));
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/meet') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        return sendJson(res, 200, stranger.joinQueue(me.username, body));
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/cancel') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        return sendJson(res, 200, stranger.cancelSearch(me.username));
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/message') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        return sendJson(res, 201, { message: stranger.sendMessage(me.username, body.text) });
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/typing') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        stranger.sendTyping(me.username, body.isTyping);
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/next') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        return sendJson(res, 200, stranger.skipChat(me.username, body));
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/reveal') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const result = await stranger.requestReveal(me.username);
+        return sendJson(res, 200, result);
+      }
+
+      if (method === 'POST' && pathname === '/api/stranger/report') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        return sendJson(res, 200, stranger.reportPartner(me.username, body.reason));
+      }
+
+      // ===================================================================
+      // Audio & Video Calling (WebRTC Signaling)
+      // ===================================================================
+      if (method === 'GET' && pathname === '/api/calls/config') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        return sendJson(res, 200, { iceServers: calls.getIceServers() });
+      }
+
+      if (method === 'POST' && pathname === '/api/calls/start') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const result = await calls.startCall({
+          callerUsername: me.username,
+          targetUsername: body.targetUsername,
+          mode: body.mode,
+          chatId: body.chatId
+        });
+        return sendJson(res, 201, result);
+      }
+
+      const callActionMatch = /^\/api\/calls\/([^/]+)\/(accept|signal|decline|end)$/.exec(pathname);
+      if (method === 'POST' && callActionMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, callId, action] = callActionMatch;
+        const body = await readJsonBody(req);
+        if (action === 'accept') return sendJson(res, 200, calls.acceptCall(callId, me.username));
+        if (action === 'signal') return sendJson(res, 200, calls.relaySignal(callId, me.username, body));
+        if (action === 'decline') return sendJson(res, 200, calls.declineCall(callId, me.username));
+        if (action === 'end') return sendJson(res, 200, calls.endCall(callId, me.username, body.reason || 'hangup'));
+      }
+
       // SSE Real-time Event Stream
       if (method === 'GET' && pathname === '/api/events') {
         const me = await requireAuth(req, res);
@@ -572,6 +820,8 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         req.on('close', async () => {
           const becameOffline = conn.remove();
           if (becameOffline) {
+            stranger.onUserDisconnect(me.username);
+            calls.onUserDisconnect(me.username);
             await storage.updateLastSeen(me.username).catch(() => { });
             hub.broadcastAll('presence', {
               username: me.username,
