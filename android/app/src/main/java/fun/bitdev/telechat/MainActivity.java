@@ -37,6 +37,7 @@ public class MainActivity extends Activity {
     private String baseHost;
     private String pendingOpenChatId;
     private boolean pendingOpenUpdates = false;
+    private volatile boolean activityVisible = true;
     private UpdateManager updateManager;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -164,9 +165,11 @@ public class MainActivity extends Activity {
 
         updateManager = new UpdateManager(this, this::pushUpdateStateToWebView);
         updateManager.cleanupOldApks(true);
+        MessageService.clearLegacyForegroundNotification(this);
 
         requestNotificationPermissionIfNeeded();
         startMessageServiceIfPermitted();
+        MessagePollJobService.schedule(this);
         handleIntent(getIntent());
         webView.loadUrl(baseUrl);
         updateManager.checkForUpdate(false, true);
@@ -175,6 +178,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityVisible = true;
+        MessageService.clearLegacyForegroundNotification(this);
+        startMessageServiceIfPermitted();
         if (updateManager != null) {
             updateManager.onActivityResumed(this);
             pushUpdateStateToWebView(updateManager.toStateJson());
@@ -188,7 +194,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        activityVisible = false;
         CookieManager.getInstance().flush();
+        if (hasNotificationPermission()) {
+            MessagePollJobService.schedule(this);
+        }
         if (webView != null) {
             webView.evaluateJavascript("if (window.__telechatSyncState) window.__telechatSyncState(false);", null);
         }
@@ -310,14 +320,9 @@ public class MainActivity extends Activity {
     }
 
     private void startMessageServiceIfPermitted() {
-        if (!hasNotificationPermission()) return;
+        if (!hasNotificationPermission() || !activityVisible) return;
         try {
-            Intent svc = new Intent(this, MessageService.class);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(svc);
-            } else {
-                startService(svc);
-            }
+            startService(new Intent(this, MessageService.class));
         } catch (Exception ignored) {
         }
     }
@@ -326,8 +331,8 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setAppState(String username, String chatId, boolean isForeground) {
             CookieManager.getInstance().flush();
-            MessageService.updateAppState(username, chatId, isForeground);
-            if (username != null && !username.isEmpty()) {
+            MessageService.updateAppState(MainActivity.this, username, chatId, isForeground);
+            if (username != null && !username.isEmpty() && isForeground) {
                 runOnUiThread(MainActivity.this::startMessageServiceIfPermitted);
             }
         }
@@ -375,7 +380,7 @@ public class MainActivity extends Activity {
             String avatarUrl,
             String avatarColor
         ) {
-            if (messageId != null && !messageId.isEmpty() && !MessageService.markNotifiedIfNew(messageId)) {
+            if (messageId != null && !messageId.isEmpty() && !MessageService.markNotifiedIfNew(MainActivity.this, messageId)) {
                 return;
             }
             new Thread(() -> MessageService.showMessageNotification(

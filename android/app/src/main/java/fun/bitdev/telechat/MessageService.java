@@ -10,8 +10,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.LocusId;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.content.pm.ServiceInfo;
 import android.content.pm.ShortcutInfo;
 import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
@@ -45,9 +45,12 @@ import java.util.regex.Pattern;
 public class MessageService extends Service {
 
     public static final String CHANNEL_MESSAGES = "telechat_messages_v2";
-    public static final String CHANNEL_SERVICE = "telechat_service";
     public static final String EXTRA_CHAT_ID = "extra_chat_id";
-    private static final int FOREGROUND_ID = 101;
+    private static final int LEGACY_FOREGROUND_ID = 101;
+    private static final String LEGACY_SERVICE_CHANNEL = "telechat_service";
+    private static final String PREFS_NOTIF = "telechat_notif_prefs";
+    private static final String KEY_USERNAME = "saved_username";
+    private static final String KEY_NOTIFIED_IDS = "notified_ids_csv";
     private static final Pattern HEX_COLOR_PATTERN = Pattern.compile("#([0-9a-fA-F]{6})");
 
     private volatile boolean running = false;
@@ -57,41 +60,88 @@ public class MessageService extends Service {
     private static volatile boolean appInForeground = false;
     private static final Set<String> notifiedMessageIds = Collections.synchronizedSet(new LinkedHashSet<>());
 
-    public static void updateAppState(String username, String chatId, boolean inForeground) {
+    public static void updateAppState(Context ctx, String username, String chatId, boolean inForeground) {
         currentUsername = username != null ? username : "";
         activeChatId = chatId != null ? chatId : "";
         appInForeground = inForeground;
+        if (ctx != null && !currentUsername.isEmpty()) {
+            ctx.getSharedPreferences(PREFS_NOTIF, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_USERNAME, currentUsername)
+                .apply();
+        }
     }
 
-    public static boolean markNotifiedIfNew(String msgId) {
+    public static String getSavedUsername(Context ctx) {
+        if (!currentUsername.isEmpty()) return currentUsername;
+        if (ctx == null) return "";
+        return ctx.getSharedPreferences(PREFS_NOTIF, Context.MODE_PRIVATE).getString(KEY_USERNAME, "");
+    }
+
+    public static boolean isChatActiveInForeground(String chatId) {
+        return appInForeground && chatId != null && chatId.equals(activeChatId);
+    }
+
+    public static boolean markNotifiedIfNew(Context ctx, String msgId) {
         if (msgId == null || msgId.isEmpty()) return true;
         synchronized (notifiedMessageIds) {
+            if (notifiedMessageIds.isEmpty() && ctx != null) {
+                String saved = ctx.getSharedPreferences(PREFS_NOTIF, Context.MODE_PRIVATE).getString(KEY_NOTIFIED_IDS, "");
+                if (!saved.isEmpty()) {
+                    for (String part : saved.split(",")) {
+                        if (!part.isEmpty()) notifiedMessageIds.add(part);
+                    }
+                }
+            }
             if (notifiedMessageIds.contains(msgId)) return false;
             notifiedMessageIds.add(msgId);
-            if (notifiedMessageIds.size() > 150) {
+            while (notifiedMessageIds.size() > 100) {
                 String first = notifiedMessageIds.iterator().next();
                 notifiedMessageIds.remove(first);
             }
+            if (ctx != null) {
+                StringBuilder sb = new StringBuilder();
+                for (String id : notifiedMessageIds) {
+                    if (sb.length() > 0) sb.append(',');
+                    sb.append(id);
+                }
+                ctx.getSharedPreferences(PREFS_NOTIF, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_NOTIFIED_IDS, sb.toString())
+                    .apply();
+            }
             return true;
+        }
+    }
+
+    public static void clearLegacyForegroundNotification(Context ctx) {
+        try {
+            NotificationManager manager = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
+            if (manager == null) return;
+            manager.cancel(LEGACY_FOREGROUND_ID);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                manager.deleteNotificationChannel(LEGACY_SERVICE_CHANNEL);
+            }
+        } catch (Exception ignored) {
         }
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
-        createNotificationChannels();
+        createNotificationChannel();
+        clearLegacyForegroundNotification(this);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForegroundCompat();
         if (!running) {
             running = true;
             workerThread = new Thread(this::listenLoop, "TeleChat-SSE");
             workerThread.setDaemon(true);
             workerThread.start();
         }
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override
@@ -106,31 +156,6 @@ public class MessageService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
-    }
-
-    private void startForegroundCompat() {
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? new Notification.Builder(this, CHANNEL_SERVICE)
-            : new Notification.Builder(this);
-
-        Intent openIntent = new Intent(this, MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(
-            this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
-
-        Notification notif = builder
-            .setSmallIcon(R.drawable.ic_stat_telechat)
-            .setContentTitle("TeleChat")
-            .setContentText("Connected for incoming messages")
-            .setOngoing(true)
-            .setContentIntent(pi)
-            .build();
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(FOREGROUND_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
-        } else {
-            startForeground(FOREGROUND_ID, notif);
-        }
     }
 
     private void listenLoop() {
@@ -199,7 +224,13 @@ public class MessageService extends Service {
             if ("connected".equals(eventName)) {
                 JSONObject obj = new JSONObject(jsonStr);
                 String uname = obj.optString("username", "");
-                if (!uname.isEmpty()) currentUsername = uname;
+                if (!uname.isEmpty()) {
+                    currentUsername = uname;
+                    getSharedPreferences(PREFS_NOTIF, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_USERNAME, uname)
+                        .apply();
+                }
                 return;
             }
             if (!"new_message".equals(eventName)) return;
@@ -211,9 +242,9 @@ public class MessageService extends Service {
 
             String msgId = msg.optString("id", "");
             String sender = msg.optString("sender", "");
-            if (sender.isEmpty() || sender.equals(currentUsername)) return;
-            if (appInForeground && chatId.equals(activeChatId)) return;
-            if (!markNotifiedIfNew(msgId)) return;
+            if (sender.isEmpty() || sender.equals(getSavedUsername(this))) return;
+            if (isChatActiveInForeground(chatId)) return;
+            if (!markNotifiedIfNew(this, msgId)) return;
 
             JSONObject senderProfile = obj.optJSONObject("senderProfile");
             String displayName = senderProfile != null && !senderProfile.isNull("displayName")
@@ -244,7 +275,7 @@ public class MessageService extends Service {
         }
     }
 
-    private void createNotificationChannels() {
+    private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager == null) return;
@@ -258,15 +289,6 @@ public class MessageService extends Service {
             msgChannel.enableVibration(true);
             msgChannel.enableLights(true);
             manager.createNotificationChannel(msgChannel);
-
-            NotificationChannel svcChannel = new NotificationChannel(
-                CHANNEL_SERVICE,
-                "Background Connection",
-                NotificationManager.IMPORTANCE_MIN
-            );
-            svcChannel.setDescription("Keeps TeleChat connected for instant notifications");
-            svcChannel.setShowBadge(false);
-            manager.createNotificationChannel(svcChannel);
         }
     }
 
@@ -385,6 +407,21 @@ public class MessageService extends Service {
         NotificationManager manager = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel existing = manager.getNotificationChannel(CHANNEL_MESSAGES);
+            if (existing == null) {
+                NotificationChannel ch = new NotificationChannel(
+                    CHANNEL_MESSAGES,
+                    "Messages",
+                    NotificationManager.IMPORTANCE_HIGH
+                );
+                ch.setDescription("Incoming chat message notifications");
+                ch.enableVibration(true);
+                ch.enableLights(true);
+                manager.createNotificationChannel(ch);
+            }
+        }
+
         String safeTitle = title != null && !title.isEmpty() ? title : "TeleChat";
         String safeBody = body != null && !body.isEmpty() ? body : "New message";
         String shortcutId = (chatId != null && !chatId.isEmpty())
@@ -434,7 +471,6 @@ public class MessageService extends Service {
                 .setKey("me")
                 .build();
 
-            // Publish dynamic conversation shortcut so Android 11+ shows the large circular avatar directly (Messenger-style)
             try {
                 ShortcutManager shortcutManager = ctx.getSystemService(ShortcutManager.class);
                 if (shortcutManager != null) {
