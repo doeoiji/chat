@@ -29,17 +29,17 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Cache Android Debug Keystore
+      - name: Cache Android Release Keystore
         uses: actions/cache@v4
         with:
-          path: ~/.android/debug.keystore
-          key: telechat-debug-keystore-v1
+          path: ~/.android/telechat-release.jks
+          key: telechat-release-keystore-v1
 
-      - name: Ensure Debug Keystore Exists
+      - name: Ensure Release Keystore Exists
         run: |
           mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=TeleChat Debug,O=TeleChat,C=US"
+          if [ ! -f ~/.android/telechat-release.jks ]; then
+            keytool -genkeypair -v -keystore ~/.android/telechat-release.jks -storepass telechat_release_key -alias telechat -keypass telechat_release_key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=TeleChat,O=BitDev,C=US"
           fi
 
       - name: Set up Gradle
@@ -47,9 +47,9 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build Debug APK
+      - name: Build Signed Release APK
         working-directory: android
-        run: gradle assembleDebug
+        run: gradle assembleRelease
 
       - name: Publish GitHub Release & Upload APK
         env:
@@ -57,8 +57,8 @@ jobs:
         run: |
           VER=$(grep -E 'versionName\s+"' android/app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
           TAG="v${VER}"
-          APK="android/app/build/outputs/apk/debug/TeleChat-${TAG}.apk"
-          cp android/app/build/outputs/apk/debug/app-debug.apk "$APK"
+          APK="android/app/build/outputs/apk/release/TeleChat-${TAG}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
@@ -68,5 +68,5 @@ jobs:
       - name: Upload TeleChat APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TeleChat-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: TeleChat-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk

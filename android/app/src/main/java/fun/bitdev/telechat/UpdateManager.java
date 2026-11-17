@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageInstaller;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
@@ -19,9 +20,12 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -55,11 +59,32 @@ public class UpdateManager {
     private volatile long apkSizeBytes = 0;
     private volatile boolean updateAvailable = false;
     private volatile boolean waitingInstallPermission = false;
+    private static WeakReference<UpdateManager> activeInstance = new WeakReference<>(null);
 
     public UpdateManager(Context ctx, Listener listener) {
         this.ctx = ctx.getApplicationContext();
         this.listener = listener;
+        activeInstance = new WeakReference<>(this);
         createUpdateChannel();
+    }
+
+    public static void notifyInstallSuccess() {
+        UpdateManager mgr = activeInstance.get();
+        if (mgr == null) return;
+        mgr.deleteDownloadedApkNow();
+        mgr.updateAvailable = false;
+        mgr.status = "up_to_date";
+        mgr.errorMessage = "";
+        mgr.emitState();
+    }
+
+    public static void notifyInstallFailure(String message) {
+        UpdateManager mgr = activeInstance.get();
+        if (mgr == null) return;
+        mgr.deleteDownloadedApkNow();
+        mgr.status = "error";
+        mgr.errorMessage = message != null ? message : "Installation failed.";
+        mgr.emitState();
     }
 
     public String getInstalledVersionName() {
@@ -370,11 +395,7 @@ public class UpdateManager {
                 status = "installing";
                 emitState();
 
-                Uri contentUri = ApkFileProvider.getUriForUpdateApk(ctx, fileName);
-                Intent installIntent = new Intent(Intent.ACTION_VIEW);
-                installIntent.setDataAndType(contentUri, ApkFileProvider.APK_MIME);
-                installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                ctx.startActivity(installIntent);
+                installApkViaPackageInstaller(targetFile);
             } catch (Exception e) {
                 deleteDownloadedApkNow();
                 status = "error";
@@ -385,6 +406,39 @@ public class UpdateManager {
                 if (conn != null) conn.disconnect();
             }
         }, "TeleChat-UpdateDownload").start();
+    }
+
+    private void installApkViaPackageInstaller(File apkFile) throws Exception {
+        PackageInstaller installer = ctx.getPackageManager().getPackageInstaller();
+        PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
+            PackageInstaller.SessionParams.MODE_FULL_INSTALL
+        );
+        params.setAppPackageName(ctx.getPackageName());
+
+        int sessionId = installer.createSession(params);
+        try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+            try (InputStream in = new FileInputStream(apkFile);
+                 OutputStream out = session.openWrite("telechat_update.apk", 0, apkFile.length())) {
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                }
+                session.fsync(out);
+            }
+
+            Intent callbackIntent = new Intent(ctx, UpdateInstallReceiver.class);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                flags |= PendingIntent.FLAG_MUTABLE;
+            }
+            PendingIntent pi = PendingIntent.getBroadcast(ctx, sessionId, callbackIntent, flags);
+            session.commit(pi.getIntentSender());
+        } finally {
+            // PackageInstaller already holds its staged copy; remove downloaded file immediately to free storage
+            //noinspection ResultOfMethodCallIgnored
+            apkFile.delete();
+        }
     }
 
     public void onActivityResumed(Context activityCtx) {

@@ -2,6 +2,11 @@ plugins {
     id 'com.android.application'
 }
 
+def keystoreFile = file(System.getenv("TELECHAT_KEYSTORE_PATH") ?: "${System.getProperty('user.home')}/.android/telechat-release.jks")
+def keystorePass = System.getenv("TELECHAT_KEYSTORE_PASS") ?: "telechat_release_key"
+def releaseKeyAlias = System.getenv("TELECHAT_KEY_ALIAS") ?: "telechat"
+def releaseKeyPass = System.getenv("TELECHAT_KEY_PASS") ?: "telechat_release_key"
+
 android {
     namespace 'fun.bitdev.telechat'
     compileSdk 35
@@ -10,13 +15,27 @@ android {
         applicationId "fun.bitdev.telechat"
         minSdk 24
         targetSdk 35
-        versionCode 2
-        versionName "1.0.1"
+        versionCode 3
+        versionName "1.0.2"
+    }
+
+    signingConfigs {
+        release {
+            if (keystoreFile.exists()) {
+                storeFile keystoreFile
+                storePassword keystorePass
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPass
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            if (keystoreFile.exists()) {
+                signingConfig signingConfigs.release
+            }
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
