@@ -293,15 +293,34 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void showNotification(String title, String body, String chatId) {
-            showNotification(title, body, chatId, "");
+            showNotification(title, body, chatId, "", "", "");
         }
 
         @JavascriptInterface
         public void showNotification(String title, String body, String chatId, String messageId) {
+            showNotification(title, body, chatId, messageId, "", "");
+        }
+
+        @JavascriptInterface
+        public void showNotification(
+            String title,
+            String body,
+            String chatId,
+            String messageId,
+            String avatarUrl,
+            String avatarColor
+        ) {
             if (messageId != null && !messageId.isEmpty() && !MessageService.markNotifiedIfNew(messageId)) {
                 return;
             }
-            MessageService.showMessageNotification(MainActivity.this, title, body, chatId);
+            new Thread(() -> MessageService.showMessageNotification(
+                MainActivity.this,
+                title,
+                body,
+                chatId,
+                avatarUrl,
+                avatarColor
+            )).start();
         }
     }
 }

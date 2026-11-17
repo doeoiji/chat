@@ -5,10 +5,21 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.Person;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Shader;
+import android.graphics.Typeface;
+import android.graphics.drawable.Icon;
 import android.os.Build;
 import android.os.IBinder;
 import android.webkit.CookieManager;
@@ -17,6 +28,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -24,6 +36,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MessageService extends Service {
 
@@ -31,6 +45,7 @@ public class MessageService extends Service {
     public static final String CHANNEL_SERVICE = "telechat_service";
     public static final String EXTRA_CHAT_ID = "extra_chat_id";
     private static final int FOREGROUND_ID = 101;
+    private static final Pattern HEX_COLOR_PATTERN = Pattern.compile("#([0-9a-fA-F]{6})");
 
     private volatile boolean running = false;
     private Thread workerThread;
@@ -198,9 +213,15 @@ public class MessageService extends Service {
             if (!markNotifiedIfNew(msgId)) return;
 
             JSONObject senderProfile = obj.optJSONObject("senderProfile");
-            String displayName = senderProfile != null
+            String displayName = senderProfile != null && !senderProfile.isNull("displayName")
                 ? senderProfile.optString("displayName", sender)
                 : sender;
+            String avatarUrl = senderProfile != null && !senderProfile.isNull("avatarUrl")
+                ? senderProfile.optString("avatarUrl", "")
+                : "";
+            String avatarColor = senderProfile != null && !senderProfile.isNull("avatarColor")
+                ? senderProfile.optString("avatarColor", "")
+                : "";
 
             String body = msg.optString("text", "").trim();
             if (body.isEmpty()) {
@@ -215,7 +236,7 @@ public class MessageService extends Service {
                 }
             }
 
-            showMessageNotification(this, displayName, body, chatId);
+            showMessageNotification(this, displayName, body, chatId, avatarUrl, avatarColor);
         } catch (Exception ignored) {
         }
     }
@@ -246,7 +267,113 @@ public class MessageService extends Service {
         }
     }
 
-    public static void showMessageNotification(android.content.Context ctx, String title, String body, String chatId) {
+    private static Bitmap fetchAvatarBitmap(Context ctx, String avatarUrl) {
+        if (avatarUrl == null || avatarUrl.isEmpty() || "null".equals(avatarUrl)) return null;
+        HttpURLConnection conn = null;
+        try {
+            String baseUrl = ctx.getString(R.string.app_url);
+            String fullUrl = avatarUrl.startsWith("http://") || avatarUrl.startsWith("https://")
+                ? avatarUrl
+                : baseUrl + (avatarUrl.startsWith("/") ? "" : "/") + avatarUrl;
+
+            URL url = new URL(fullUrl);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            String cookie = CookieManager.getInstance().getCookie(baseUrl);
+            if (cookie != null && !cookie.isEmpty()) {
+                conn.setRequestProperty("Cookie", cookie);
+            }
+            if (conn.getResponseCode() != 200) return null;
+
+            try (InputStream is = conn.getInputStream()) {
+                Bitmap decoded = BitmapFactory.decodeStream(is);
+                if (decoded == null) return null;
+                return toCircularBitmap(decoded, 128);
+            }
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private static Bitmap toCircularBitmap(Bitmap source, int sizePx) {
+        int srcW = source.getWidth();
+        int srcH = source.getHeight();
+        int cropSize = Math.min(srcW, srcH);
+        int cropX = (srcW - cropSize) / 2;
+        int cropY = (srcH - cropSize) / 2;
+
+        Bitmap square = Bitmap.createBitmap(source, cropX, cropY, cropSize, cropSize);
+        Bitmap scaled = Bitmap.createScaledBitmap(square, sizePx, sizePx, true);
+        if (square != source) square.recycle();
+
+        Bitmap out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(out);
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        paint.setShader(new BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP));
+        float r = sizePx / 2f;
+        canvas.drawCircle(r, r, r, paint);
+        scaled.recycle();
+        return out;
+    }
+
+    private static Bitmap createInitialsAvatar(String displayName, String avatarColor) {
+        int sizePx = 128;
+        Bitmap out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(out);
+
+        int bgColor = Color.parseColor("#5288C1");
+        if (avatarColor != null && !avatarColor.isEmpty()) {
+            Matcher m = HEX_COLOR_PATTERN.matcher(avatarColor);
+            if (m.find()) {
+                try {
+                    bgColor = Color.parseColor("#" + m.group(1));
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setColor(bgColor);
+        float r = sizePx / 2f;
+        canvas.drawCircle(r, r, r, bgPaint);
+
+        String initials = "?";
+        if (displayName != null && !displayName.trim().isEmpty()) {
+            String[] words = displayName.trim().split("\\s+");
+            if (words.length >= 2) {
+                initials = ("" + words[0].charAt(0) + words[1].charAt(0)).toUpperCase();
+            } else {
+                String w = words[0];
+                initials = w.substring(0, Math.min(2, w.length())).toUpperCase();
+            }
+        }
+
+        Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        textPaint.setColor(Color.WHITE);
+        textPaint.setTextSize(50f);
+        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        Paint.FontMetrics fm = textPaint.getFontMetrics();
+        float textY = r - (fm.ascent + fm.descent) / 2f;
+        canvas.drawText(initials, r, textY, textPaint);
+        return out;
+    }
+
+    public static void showMessageNotification(Context ctx, String title, String body, String chatId) {
+        showMessageNotification(ctx, title, body, chatId, "", "");
+    }
+
+    public static void showMessageNotification(
+        Context ctx,
+        String title,
+        String body,
+        String chatId,
+        String avatarUrl,
+        String avatarColor
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 return;
@@ -254,6 +381,14 @@ public class MessageService extends Service {
         }
         NotificationManager manager = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
+
+        String safeTitle = title != null && !title.isEmpty() ? title : "TeleChat";
+        String safeBody = body != null && !body.isEmpty() ? body : "New message";
+
+        Bitmap avatarBmp = fetchAvatarBitmap(ctx, avatarUrl);
+        if (avatarBmp == null) {
+            avatarBmp = createInitialsAvatar(safeTitle, avatarColor);
+        }
 
         Intent openIntent = new Intent(ctx, MainActivity.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -273,11 +408,23 @@ public class MessageService extends Service {
             : new Notification.Builder(ctx);
 
         builder.setSmallIcon(R.drawable.ic_stat_telechat)
-            .setContentTitle(title != null && !title.isEmpty() ? title : "TeleChat")
-            .setContentText(body != null ? body : "New message")
-            .setStyle(new Notification.BigTextStyle().bigText(body != null ? body : "New message"))
+            .setLargeIcon(avatarBmp)
+            .setContentTitle(safeTitle)
+            .setContentText(safeBody)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Person sender = new Person.Builder()
+                .setName(safeTitle)
+                .setIcon(Icon.createWithBitmap(avatarBmp))
+                .build();
+            Notification.MessagingStyle style = new Notification.MessagingStyle(sender)
+                .addMessage(safeBody, System.currentTimeMillis(), sender);
+            builder.setStyle(style);
+        } else {
+            builder.setStyle(new Notification.BigTextStyle().bigText(safeBody));
+        }
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             builder.setPriority(Notification.PRIORITY_HIGH);

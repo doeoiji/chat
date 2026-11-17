@@ -524,7 +524,7 @@
     }
   }
 
-  async function notifyIncomingMessage({ chatId, messageId, senderUsername, senderName, bodyText }) {
+  async function notifyIncomingMessage({ chatId, messageId, senderUsername, senderName, senderAvatarUrl, senderAvatarColor, bodyText }) {
     if (!state.prefs.notifications) return;
     const appInBackground = document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus());
     const otherChat = chatId !== state.activeChatId;
@@ -533,7 +533,14 @@
     // 1. Native Android WebView bridge (deduplicated with MessageService by messageId)
     if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
       try {
-        window.AndroidBridge.showNotification(senderName, bodyText, chatId || '', messageId || '');
+        window.AndroidBridge.showNotification(
+          senderName,
+          bodyText,
+          chatId || '',
+          messageId || '',
+          senderAvatarUrl || '',
+          senderAvatarColor || ''
+        );
         return;
       } catch {
         // Fallback to browser Notification API
@@ -544,7 +551,7 @@
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const options = {
       body: bodyText,
-      icon: '/icon-192.png',
+      icon: senderAvatarUrl || '/icon-192.png',
       badge: '/icon-192.png',
       tag: `telechat-${chatId}`,
       renotify: true,
@@ -1482,6 +1489,8 @@
       const data = JSON.parse(ev.data);
       const isIncoming = data.message.sender !== state.me.username;
       const senderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
+      const senderAvatarUrl = (data.senderProfile && data.senderProfile.avatarUrl) || '';
+      const senderAvatarColor = (data.senderProfile && data.senderProfile.avatarColor) || '';
       const bodyPreview = data.message.text
         ? data.message.text.slice(0, 120)
         : (data.message.attachments && data.message.attachments[0]
@@ -1502,6 +1511,8 @@
             messageId: data.message.id,
             senderUsername: data.message.sender,
             senderName,
+            senderAvatarUrl,
+            senderAvatarColor,
             bodyText: bodyPreview
           });
           await markActiveChatRead();
@@ -1514,6 +1525,8 @@
           messageId: data.message.id,
           senderUsername: data.message.sender,
           senderName,
+          senderAvatarUrl,
+          senderAvatarColor,
           bodyText: bodyPreview
         });
       }
@@ -1894,7 +1907,14 @@
     els.testNotifBtn.addEventListener('click', async () => {
       const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
       if (hasAndroidBridge) {
-        window.AndroidBridge.showNotification('TeleChat Test', 'Android notifications are working!', state.activeChatId || '', `test_${Date.now()}`);
+        window.AndroidBridge.showNotification(
+          state.me ? (state.me.displayName || state.me.username) : 'TeleChat Test',
+          'Android notifications with profile photo are working!',
+          state.activeChatId || '',
+          `test_${Date.now()}`,
+          state.me ? (state.me.avatarUrl || '') : '',
+          state.me ? (state.me.avatarColor || '') : ''
+        );
         showToast('Sent Android test notification!', 'success');
         return;
       }
