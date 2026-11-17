@@ -478,6 +478,20 @@ test('full user registration, folder storage, search, chat logs, and image/file 
   assert.equal(avatarRes.status, 200);
   assert.ok(avatarRes.body.user.avatarUrl);
 
+  // Avatars > 8 MB (common for phone camera images) should also succeed up to maxUploadBytes
+  const largeAvatarBody = Buffer.concat([
+    Buffer.from(`--${avatarBoundary}\r\nContent-Disposition: form-data; name="avatar"; filename="big.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
+    Buffer.alloc(9 * 1024 * 1024, 0xaa),
+    Buffer.from(`\r\n--${avatarBoundary}--\r\n`)
+  ]);
+  const largeAvatarRes = await req('/api/users/me/avatar', {
+    method: 'POST',
+    headers: { Cookie: aliceReg.cookie, 'Content-Type': `multipart/form-data; boundary=${avatarBoundary}` },
+    body: largeAvatarBody
+  });
+  assert.equal(largeAvatarRes.status, 200);
+  assert.ok(largeAvatarRes.body.user.avatarUrl);
+
   // 10. List chats for Alice
   const chatsRes = await req('/api/chats', { headers: { Cookie: aliceReg.cookie } });
   assert.equal(chatsRes.status, 200);
@@ -506,6 +520,74 @@ test('full user registration, folder storage, search, chat logs, and image/file 
     headers: { Cookie: aliceReg.cookie }
   });
   assert.equal(delRes.status, 200);
+
+  // 13. Remove avatar, change username + display name, verify chat & cookie migration
+  const removeAvatarRes = await req('/api/users/me/avatar', {
+    method: 'DELETE',
+    headers: { Cookie: aliceReg.cookie }
+  });
+  assert.equal(removeAvatarRes.status, 200);
+  assert.equal(removeAvatarRes.body.user.avatarUrl, null);
+  const oldUploadsDir = path.join(config.usersDir, 'alice_01', 'uploads');
+  assert.equal(fs.readdirSync(oldUploadsDir).length, 0);
+
+  // Upload a small avatar again before renaming username so we test avatarUrl rewrite
+  const reUploadAvatar = await req('/api/users/me/avatar', {
+    method: 'POST',
+    headers: { Cookie: aliceReg.cookie, 'Content-Type': `multipart/form-data; boundary=${avatarBoundary}` },
+    body: avatarBody
+  });
+  assert.equal(reUploadAvatar.status, 200);
+  assert.ok(reUploadAvatar.body.user.avatarUrl);
+
+  // Reject taken username
+  const takenRename = await req('/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: aliceReg.cookie },
+    body: JSON.stringify({ username: 'bob_dev', displayName: 'Alice Prime' })
+  });
+  assert.equal(takenRename.status, 409);
+
+  // Reject invalid username
+  const badRename = await req('/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: aliceReg.cookie },
+    body: JSON.stringify({ username: 'ab', displayName: 'Alice Prime' })
+  });
+  assert.equal(badRename.status, 400);
+
+  // Successful username + display name change
+  const renameRes = await req('/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: aliceReg.cookie },
+    body: JSON.stringify({ username: 'alice_prime', displayName: 'Alice Prime', bio: 'Renamed!' })
+  });
+  assert.equal(renameRes.status, 200);
+  assert.equal(renameRes.body.user.username, 'alice_prime');
+  assert.equal(renameRes.body.user.displayName, 'Alice Prime');
+  assert.equal(renameRes.body.renamedFrom, 'alice_01');
+  assert.match(renameRes.body.user.avatarUrl, /^\/api\/users\/alice_prime\/avatar\//);
+  assert.ok(renameRes.cookie, 'Should return refreshed session cookie after username change');
+  assert.equal(fs.existsSync(path.join(config.usersDir, 'alice_01')), false);
+  assert.equal(fs.existsSync(path.join(config.usersDir, 'alice_prime', 'profile.json')), true);
+
+  // Verify old chat migrated cleanly and file attachments remain accessible
+  const renamedChatId = renameRes.body.chatRenames[0].newChatId;
+  assert.equal(renamedChatId, 'dm_alice_prime__bob_dev');
+  const migratedChatsRes = await req('/api/chats', { headers: { Cookie: renameRes.cookie } });
+  assert.equal(migratedChatsRes.status, 200);
+  assert.equal(migratedChatsRes.body.chats[0].id, renamedChatId);
+  const openMigrated = await req('/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: renameRes.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_dev' })
+  });
+  assert.equal(openMigrated.status, 200);
+  const migratedNotesUrl = openMigrated.body.messages[0].attachments[1].url;
+  assert.ok(migratedNotesUrl.startsWith(`/api/chats/${renamedChatId}/files/`));
+  const dlMigrated = await req(migratedNotesUrl, { headers: { Cookie: renameRes.cookie } });
+  assert.equal(dlMigrated.status, 200);
+  assert.equal(dlMigrated.body.toString('utf8'), 'hello file content');
 });
 
 test('frontend app.js boots cleanly and matches all HTML element IDs', async () => {
@@ -588,4 +670,56 @@ test('frontend app.js boots cleanly and matches all HTML element IDs', async () 
   vm.runInNewContext(js, sandbox);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(authScreenShown, true);
+});
+
+test('oversized avatar upload returns clean HTTP 413 without destroying socket', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telechat-limit-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null, maxUploadMb: 1 });
+  const auth = createAuthHelpers(config);
+  const storage = createStorage(config);
+  const hub = createRealtimeHub();
+  const mailer = createMailer(config);
+  const handleRequest = createRouter({ config, auth, storage, hub, mailer });
+
+  t.after(() => {
+    fs.rmSync(tempDataDir, { recursive: true, force: true });
+  });
+
+  const reg = await invokeRouter(handleRequest, '/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'limit_user', email: 'limit@gmail.com', password: 'secretPassword1' })
+  });
+  assert.equal(reg.status, 202);
+  const ver = await invokeRouter(handleRequest, '/api/auth/verify-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ verificationId: reg.body.verificationId, code: reg.body.devCode })
+  });
+  assert.equal(ver.status, 201);
+
+  const boundary = '----TooBigBoundary';
+  const tooBigBody = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="avatar"; filename="huge.jpg"\r\nContent-Type: image/jpeg\r\n\r\n`),
+    Buffer.alloc(2 * 1024 * 1024, 0xff),
+    Buffer.from(`\r\n--${boundary}--\r\n`)
+  ]);
+
+  const res = await invokeRouter(handleRequest, '/api/users/me/avatar', {
+    method: 'POST',
+    headers: { Cookie: ver.cookie, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body: tooBigBody
+  });
+  assert.equal(res.status, 413);
+  assert.equal(res.headers.connection, 'close');
+  assert.match(res.body.error, /exceeds maximum allowed size of 1 MB/i);
+
+  // Also verify readBodyBuffer drains cleanly instead of calling req.destroy()
+  const { readBodyBuffer } = require('../src/multipart');
+  const stream = new PassThrough();
+  const bodyPromise = readBodyBuffer(stream, 1024);
+  stream.write(Buffer.alloc(2048, 0xaa));
+  stream.end();
+  await assert.rejects(bodyPromise, (err) => err && err.statusCode === 413);
+  assert.equal(stream.destroyed, false);
 });

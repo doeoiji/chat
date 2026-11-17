@@ -591,16 +591,215 @@ function createStorage(config) {
     });
   }
 
+  async function deleteLocalAvatarFile(folder, avatarUrl) {
+    if (!folder || typeof avatarUrl !== 'string') return;
+    const prefix = '/avatar/';
+    const idx = avatarUrl.lastIndexOf(prefix);
+    if (idx < 0) return;
+    const encodedName = avatarUrl.slice(idx + prefix.length).split('?')[0];
+    let fileName = '';
+    try {
+      fileName = decodeURIComponent(encodedName);
+    } catch {
+      fileName = encodedName;
+    }
+    const safeName = path.basename(fileName);
+    if (!safeName || safeName === '.' || safeName === '..') return;
+    const uploadsDir = path.resolve(folder, 'uploads');
+    const fullPath = path.resolve(uploadsDir, safeName);
+    if (!fullPath.startsWith(uploadsDir + path.sep)) return;
+    await fsp.unlink(fullPath).catch(() => {});
+  }
+
   async function saveUserAvatar(username, file) {
     const folder = userFolder(username);
     if (!folder) throw new Error('User not found.');
+    const existing = await getUserByUsername(username);
+    const prevAvatarUrl = existing ? existing.avatarUrl : null;
     const uploadsDir = path.join(folder, 'uploads');
     await fsp.mkdir(uploadsDir, { recursive: true });
     const ext = path.extname(sanitizeFilename(file.filename)).toLowerCase() || '.png';
     const storedName = `avatar_${Date.now()}${ext}`;
     await fsp.writeFile(path.join(uploadsDir, storedName), file.data);
     const avatarUrl = `/api/users/${encodeURIComponent(username)}/avatar/${encodeURIComponent(storedName)}`;
-    return updateUserProfile(username, { avatarUrl });
+    const updated = await updateUserProfile(username, { avatarUrl });
+    if (prevAvatarUrl && prevAvatarUrl !== avatarUrl) {
+      await deleteLocalAvatarFile(folder, prevAvatarUrl);
+    }
+    return updated;
+  }
+
+  async function removeUserAvatar(username) {
+    const folder = userFolder(username);
+    if (!folder) return null;
+    return withLock(`user:${username}`, async () => {
+      const profilePath = path.join(folder, 'profile.json');
+      const user = await readJson(profilePath);
+      if (!user) return null;
+
+      const prevAvatarUrl = user.avatarUrl;
+      user.avatarUrl = null;
+      user.lastSeen = new Date().toISOString();
+      await writeJsonAtomic(profilePath, user);
+      await deleteLocalAvatarFile(folder, prevAvatarUrl);
+      return toPublicUser(user);
+    });
+  }
+
+  function replaceUsernameInChatData(meta, messages, oldUsername, newUsername, oldChatId, newChatId) {
+    meta.id = newChatId;
+    meta.participants = meta.participants.map((p) => (p === oldUsername ? newUsername : p)).sort();
+    if (meta.unreadCounts && Object.prototype.hasOwnProperty.call(meta.unreadCounts, oldUsername)) {
+      meta.unreadCounts[newUsername] = meta.unreadCounts[oldUsername];
+      delete meta.unreadCounts[oldUsername];
+    }
+    if (meta.lastMessage && meta.lastMessage.sender === oldUsername) {
+      meta.lastMessage.sender = newUsername;
+    }
+
+    const oldFilePrefix = `/api/chats/${oldChatId}/files/`;
+    const newFilePrefix = `/api/chats/${newChatId}/files/`;
+    for (const msg of messages) {
+      if (msg.sender === oldUsername) msg.sender = newUsername;
+      if (msg.replyTo && msg.replyTo.sender === oldUsername) msg.replyTo.sender = newUsername;
+      if (Array.isArray(msg.readBy)) {
+        msg.readBy = msg.readBy.map((u) => (u === oldUsername ? newUsername : u));
+      }
+      if (msg.reactions && typeof msg.reactions === 'object') {
+        for (const emoji of Object.keys(msg.reactions)) {
+          if (Array.isArray(msg.reactions[emoji])) {
+            msg.reactions[emoji] = msg.reactions[emoji].map((u) => (u === oldUsername ? newUsername : u));
+          }
+        }
+      }
+      if (Array.isArray(msg.attachments)) {
+        for (const att of msg.attachments) {
+          if (typeof att.url === 'string' && att.url.startsWith(oldFilePrefix)) {
+            att.url = newFilePrefix + att.url.slice(oldFilePrefix.length);
+          }
+        }
+      }
+    }
+  }
+
+  async function updateAccountProfile(currentUsername, updates = {}) {
+    const oldClean = String(currentUsername || '').trim().toLowerCase();
+    const hasNewUsername = typeof updates.username === 'string';
+    const newClean = hasNewUsername ? updates.username.trim().toLowerCase() : oldClean;
+
+    if (!hasNewUsername || newClean === oldClean) {
+      const user = await updateUserProfile(oldClean, updates);
+      return { user, renamed: false, previousUsername: oldClean, chatRenames: [] };
+    }
+
+    if (!USERNAME_REGEX.test(newClean)) {
+      const err = new Error('Username must be 3–24 characters using only letters, numbers, and underscores.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    return withLock('users:registry', async () => {
+      const oldFolder = userFolder(oldClean);
+      const newFolder = userFolder(newClean);
+      if (!oldFolder || !newFolder) {
+        const err = new Error('Invalid username.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const existing = await getUserByUsername(newClean);
+      if (existing) {
+        const err = new Error('That username is already taken.');
+        err.statusCode = 409;
+        throw err;
+      }
+
+      const activePending = await listActivePending();
+      for (const { item } of activePending) {
+        if (item.username === newClean) {
+          const err = new Error('That username is currently awaiting email verification.');
+          err.statusCode = 409;
+          throw err;
+        }
+      }
+
+      return withLock(`user:${oldClean}`, async () => {
+        const oldProfilePath = path.join(oldFolder, 'profile.json');
+        const user = await readJson(oldProfilePath);
+        if (!user) {
+          const err = new Error('User not found.');
+          err.statusCode = 404;
+          throw err;
+        }
+
+        await fsp.rename(oldFolder, newFolder);
+
+        const prevDisplay = user.displayName;
+        user.username = newClean;
+        if (typeof updates.displayName === 'string') {
+          const trimmedDisplay = updates.displayName.trim();
+          if (trimmedDisplay) user.displayName = trimmedDisplay.slice(0, 48);
+        } else if (!prevDisplay || prevDisplay === oldClean) {
+          user.displayName = newClean;
+        }
+        if (typeof updates.bio === 'string') {
+          user.bio = updates.bio.trim().slice(0, 160);
+        }
+        const oldAvatarPrefix = `/api/users/${encodeURIComponent(oldClean)}/avatar/`;
+        if (typeof user.avatarUrl === 'string' && user.avatarUrl.startsWith(oldAvatarPrefix)) {
+          user.avatarUrl = `/api/users/${encodeURIComponent(newClean)}/avatar/${user.avatarUrl.slice(oldAvatarPrefix.length)}`;
+        }
+        user.lastSeen = new Date().toISOString();
+        await writeJsonAtomic(path.join(newFolder, 'profile.json'), user);
+
+        // Update all DM chat folders involving this user so history & attachments remain intact
+        const chatRenames = [];
+        const chatEntries = await fsp.readdir(config.chatsDir, { withFileTypes: true }).catch(() => []);
+        for (const entry of chatEntries) {
+          if (!entry.isDirectory() || !CHAT_ID_REGEX.test(entry.name)) continue;
+          const oldChatId = entry.name;
+          const oldChatFolder = path.join(config.chatsDir, oldChatId);
+          const metaCheck = await readJson(path.join(oldChatFolder, 'meta.json'));
+          if (!metaCheck || !Array.isArray(metaCheck.participants) || !metaCheck.participants.includes(oldClean)) {
+            continue;
+          }
+
+          await withLock(`chat:${oldChatId}`, async () => {
+            const metaPath = path.join(oldChatFolder, 'meta.json');
+            const messagesPath = path.join(oldChatFolder, 'messages.json');
+            const logPath = path.join(oldChatFolder, 'chat.log');
+            const meta = await readJson(metaPath);
+            if (!meta || !Array.isArray(meta.participants) || !meta.participants.includes(oldClean)) return;
+
+            const peer = meta.participants.find((p) => p !== oldClean) || newClean;
+            const newChatId = getDmChatId(newClean, peer);
+            const messages = (await readJson(messagesPath, [])) || [];
+
+            replaceUsernameInChatData(meta, messages, oldClean, newClean, oldChatId, newChatId);
+            await writeJsonAtomic(metaPath, meta);
+            await writeJsonAtomic(messagesPath, messages);
+            await fsp.appendFile(
+              logPath,
+              `# User renamed: ${oldClean} -> ${newClean} (${new Date().toISOString()})\n`,
+              'utf8'
+            ).catch(() => {});
+
+            if (newChatId !== oldChatId) {
+              const newChatFolder = path.join(config.chatsDir, newChatId);
+              await fsp.rename(oldChatFolder, newChatFolder);
+            }
+            chatRenames.push({ oldChatId, newChatId });
+          });
+        }
+
+        return {
+          user: toPublicUser(user),
+          renamed: true,
+          previousUsername: oldClean,
+          chatRenames
+        };
+      });
+    });
   }
 
   async function getUserAvatarPath(username, filename) {
@@ -1024,7 +1223,9 @@ function createStorage(config) {
     authenticateUser,
     updateLastSeen,
     updateUserProfile,
+    updateAccountProfile,
     saveUserAvatar,
+    removeUserAvatar,
     getUserAvatarPath,
     searchUsers,
     ensureChatFolder,

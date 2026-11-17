@@ -13,10 +13,14 @@ function readBodyBuffer(req, maxBytes) {
       total += chunk.length;
       if (total > maxBytes) {
         aborted = true;
-        const err = new Error(`Upload exceeds maximum allowed size of ${Math.round(maxBytes / (1024 * 1024))} MB.`);
+        chunks.length = 0;
+        const limitMb = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
+        const err = new Error(`Upload exceeds maximum allowed size of ${limitMb} MB.`);
         err.statusCode = 413;
+        // Drain remaining request data rather than destroying the socket so reverse proxies
+        // (such as cloudflared) receive a clean 413 JSON response instead of 502 Bad Gateway.
+        req.resume();
         reject(err);
-        req.destroy();
         return;
       }
       chunks.push(chunk);

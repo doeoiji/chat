@@ -1,7 +1,8 @@
 (() => {
   'use strict';
 
-  const QUICK_REACTIONS = ['👍', '❤️', '😂', '🔥', '👏'];
+  const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+  const MORE_REACTIONS = ['🙏', '🎉', '👏', '💯', '😍', '🤯', '👀', '⚡'];
   const EMOJI_LIST = [
     '😀', '😂', '🥹', '😍', '🥰', '😎', '🤩',
     '🤔', '😅', '😭', '🥳', '🤯', '😴', '🙏',
@@ -193,15 +194,22 @@
     profileForm: $('profile-form'),
     profileEditAvatar: $('profile-edit-avatar'),
     profileAvatarInput: $('profile-avatar-input'),
+    profileRemoveAvatarBtn: $('profile-remove-avatar-btn'),
+    profileUsername: $('profile-username'),
     profileDisplayName: $('profile-displayname'),
     profileBio: $('profile-bio'),
 
     settingsModal: $('settings-modal'),
     settingsModalBackdrop: $('settings-modal-backdrop'),
+    settingsCard: $('settings-card'),
     settingsModalClose: $('settings-modal-close'),
     settingsModalTitle: $('settings-modal-title'),
     settingsBackBtn: $('settings-back-btn'),
     settingsNav: $('settings-nav'),
+    settingsMobileProfile: $('settings-mobile-profile'),
+    settingsMobileAvatar: $('settings-mobile-avatar'),
+    settingsMobileDisplayName: $('settings-mobile-displayname'),
+    settingsMobileSub: $('settings-mobile-sub'),
     settingsAvatar: $('settings-avatar'),
     settingsDisplayName: $('settings-displayname'),
     settingsUsername: $('settings-username'),
@@ -233,6 +241,12 @@
     updateErrorMsg: $('update-error-msg'),
     updateInstallBtn: $('update-install-btn'),
     updateCheckBtn: $('update-check-btn'),
+
+    msgContextOverlay: $('msg-context-overlay'),
+    msgContextBackdrop: $('msg-context-backdrop'),
+    msgContextPopup: $('msg-context-popup'),
+    msgContextReactions: $('msg-context-reactions'),
+    msgContextCard: $('msg-context-card'),
 
     toastContainer: $('toast-container')
   };
@@ -394,7 +408,7 @@
     root.setAttribute('data-animations', p.animations ? 'on' : 'off');
     const isLight = p.theme === 'light';
     if (els.themeIcon) els.themeIcon.textContent = isLight ? '🌙' : '☀️';
-    if (els.menuThemeLabel) els.menuThemeLabel.textContent = isLight ? 'Switch to Dark Mode' : 'Switch to Light Mode';
+    if (els.menuThemeLabel) els.menuThemeLabel.textContent = isLight ? 'Night Mode' : 'Light Mode';
     syncSettingsUI();
   }
 
@@ -624,15 +638,37 @@
     }
   }
 
+  let settingsMobileView = 'menu';
+
+  function isMobileSettingsViewport() {
+    return typeof window !== 'undefined' && window.innerWidth <= 680;
+  }
+
+  function showSettingsMobileMenu() {
+    settingsMobileView = 'menu';
+    if (els.settingsCard) els.settingsCard.setAttribute('data-mobile-view', 'menu');
+    els.settingsModalTitle.textContent = 'Settings';
+    els.settingsBackBtn.classList.toggle('hidden', !isMobileSettingsViewport());
+  }
+
   function openSettingsModal(initialTab = 'general') {
     if (state.me) {
+      const displayName = state.me.displayName || state.me.username;
       renderAvatar(els.settingsAvatar, state.me);
-      els.settingsDisplayName.textContent = state.me.displayName || state.me.username;
+      els.settingsDisplayName.textContent = displayName;
       els.settingsUsername.textContent = `@${state.me.username}`;
       els.settingsEmail.textContent = state.me.email;
+
+      if (els.settingsMobileAvatar) renderAvatar(els.settingsMobileAvatar, state.me);
+      if (els.settingsMobileDisplayName) els.settingsMobileDisplayName.textContent = displayName;
+      if (els.settingsMobileSub) els.settingsMobileSub.textContent = `@${state.me.username} • ${state.me.email}`;
     }
     syncSettingsUI();
-    switchSettingsTab(initialTab);
+    if (isMobileSettingsViewport() && (!initialTab || initialTab === 'menu' || initialTab === 'general')) {
+      showSettingsMobileMenu();
+    } else {
+      switchSettingsTab(initialTab || 'general');
+    }
     els.settingsModal.classList.remove('hidden');
   }
 
@@ -642,6 +678,8 @@
 
   function switchSettingsTab(tab) {
     const valid = ['general', 'themes', 'chat', 'updates'].includes(tab) ? tab : 'general';
+    settingsMobileView = 'detail';
+    if (els.settingsCard) els.settingsCard.setAttribute('data-mobile-view', 'detail');
     els.settingsNav.querySelectorAll('[data-settings-tab]').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.settingsTab === valid);
     });
@@ -650,13 +688,15 @@
       if (panel) panel.classList.toggle('hidden', name !== valid);
     });
     const titles = {
-      general: 'Settings',
-      themes: 'Settings — Themes',
-      chat: 'Settings — Sounds & Behavior',
-      updates: 'Settings — App Update'
+      general: 'Account & Profile',
+      themes: 'Appearance',
+      chat: 'Notifications & Sounds',
+      updates: 'App Updates'
     };
-    els.settingsModalTitle.textContent = titles[valid] || 'Settings';
-    els.settingsBackBtn.classList.toggle('hidden', valid === 'general');
+    els.settingsModalTitle.textContent = isMobileSettingsViewport()
+      ? (titles[valid] || 'Settings')
+      : (valid === 'general' ? 'Settings' : (titles[valid] || 'Settings'));
+    els.settingsBackBtn.classList.toggle('hidden', !isMobileSettingsViewport() && valid === 'general');
   }
 
   let appUpdateState = null;
@@ -1236,10 +1276,7 @@
 
       const actionsHtml = `
         <div class="msg-actions">
-          <button class="msg-action-btn" type="button" data-reply-msg="${escapeHtml(msg.id)}" title="Reply">↩</button>
-          ${msg.text ? `<button class="msg-action-btn" type="button" data-copy-msg="${escapeHtml(msg.id)}" title="Copy">📋</button>` : ''}
           ${QUICK_REACTIONS.map((e) => `<button class="msg-action-btn" type="button" data-react-msg="${escapeHtml(msg.id)}" data-emoji="${e}" title="React ${e}">${e}</button>`).join('')}
-          ${isMine ? `<button class="msg-action-btn" type="button" data-delete-msg="${escapeHtml(msg.id)}" title="Delete">🗑</button>` : ''}
         </div>
       `;
 
@@ -1257,7 +1294,7 @@
       `;
 
       htmlParts.push(`
-        <div class="msg-row ${groupClasses}" id="msg-${escapeHtml(msg.id)}">
+        <div class="msg-row ${groupClasses}" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">
           ${isMine ? actionsHtml + bubbleHtml : bubbleHtml + actionsHtml}
         </div>
       `);
@@ -1537,6 +1574,22 @@
   // =========================================================================
   // Lightbox & Edit Profile Modals
   // =========================================================================
+  let activeMenuMsgId = null;
+  let activeMenuExpanded = false;
+
+  function closeMessageContextMenu() {
+    if (activeMenuMsgId) {
+      const prevRow = $(`msg-${activeMenuMsgId}`);
+      if (prevRow) prevRow.classList.remove('menu-active');
+    }
+    activeMenuMsgId = null;
+    activeMenuExpanded = false;
+    if (els.msgContextOverlay) {
+      els.msgContextOverlay.classList.add('hidden');
+      els.msgContextOverlay.setAttribute('aria-hidden', 'true');
+    }
+  }
+
   function openLightbox(url, name, sender, caption = '') {
     els.lightboxImg.src = url;
     els.lightboxMeta.textContent = `${name || 'Image'}${sender ? ` • from @${sender}` : ''}`;
@@ -1556,9 +1609,18 @@
     els.lightboxImg.src = '';
   }
 
-  function openProfileModal() {
+  function syncProfileAvatarControls() {
     if (!state.me) return;
     renderAvatar(els.profileEditAvatar, state.me);
+    if (els.profileRemoveAvatarBtn) {
+      els.profileRemoveAvatarBtn.classList.toggle('hidden', !state.me.avatarUrl);
+    }
+  }
+
+  function openProfileModal() {
+    if (!state.me) return;
+    syncProfileAvatarControls();
+    if (els.profileUsername) els.profileUsername.value = state.me.username || '';
     els.profileDisplayName.value = state.me.displayName || state.me.username;
     els.profileBio.value = state.me.bio || '';
     els.profileModal.classList.remove('hidden');
@@ -1715,21 +1777,32 @@
       await refreshChats();
     });
 
-    es.addEventListener('profile_updated', (ev) => {
+    es.addEventListener('profile_updated', async (ev) => {
       const data = JSON.parse(ev.data);
       const updated = data.user;
       if (!updated) return;
-      if (state.me && updated.username === state.me.username) {
+      const prevUsername = data.previousUsername || updated.username;
+      const renamedUser = prevUsername !== updated.username;
+
+      if (state.me && (state.me.username === updated.username || state.me.username === prevUsername)) {
         state.me = updated;
         updateDrawerUserInfo();
+        syncProfileAvatarControls();
       }
-      if (state.activePeer && updated.username === state.activePeer.username) {
+      if (state.activePeer && (state.activePeer.username === updated.username || state.activePeer.username === prevUsername)) {
         state.activePeer = { ...state.activePeer, ...updated };
         renderAvatar(els.chatPeerAvatar, state.activePeer);
         els.chatPeerName.textContent = state.activePeer.displayName || state.activePeer.username;
+        updateChatHeaderStatus();
         if (state.infoOpen) renderInfoDrawer();
       }
-      refreshChats();
+      if (renamedUser && Array.isArray(data.chatRenames) && state.activeChatId) {
+        const hit = data.chatRenames.find((r) => r.oldChatId === state.activeChatId);
+        if (hit && state.activePeer) {
+          await openChatWithUser(state.activePeer.username);
+        }
+      }
+      await refreshChats();
     });
   }
 
@@ -1969,7 +2042,21 @@
     // Settings Modal
     els.settingsModalClose.addEventListener('click', closeSettingsModal);
     els.settingsModalBackdrop.addEventListener('click', closeSettingsModal);
-    els.settingsBackBtn.addEventListener('click', () => switchSettingsTab('general'));
+    els.settingsBackBtn.addEventListener('click', () => {
+      if (isMobileSettingsViewport()) {
+        if (settingsMobileView === 'detail') {
+          showSettingsMobileMenu();
+        } else {
+          closeSettingsModal();
+        }
+      } else {
+        switchSettingsTab('general');
+      }
+    });
+    els.settingsMobileProfile.addEventListener('click', () => {
+      closeSettingsModal();
+      openProfileModal();
+    });
     els.settingsNav.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-settings-tab]');
       if (btn) switchSettingsTab(btn.dataset.settingsTab);
@@ -2243,8 +2330,206 @@
       els.messagesViewport.scrollTo({ top: els.messagesViewport.scrollHeight, behavior: 'smooth' });
     });
 
-    // Message list click delegation (Lightbox, Reply, React, Delete, Reply jump)
+    // Telegram-style Message Context Menu (Left-click on Desktop Website / Long-press on Mobile App)
+    let suppressNextClickUntil = 0;
+
+    function isMobileTouchMode() {
+      if (window.AndroidBridge) return true;
+      return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+    }
+
+    async function toggleReactionOnMessage(msgId, emoji) {
+      if (!state.activeChatId || !msgId || !emoji) return;
+      try {
+        await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages/${encodeURIComponent(msgId)}/react`, {
+          method: 'POST',
+          body: { emoji }
+        });
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function copyMessageText(msg) {
+      if (!msg || !msg.text || !navigator.clipboard) return;
+      await navigator.clipboard.writeText(msg.text).catch(() => { });
+      showToast('Message copied to clipboard', 'success');
+    }
+
+    async function deleteMessageById(msgId) {
+      if (!state.activeChatId || !msgId) return;
+      try {
+        await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages/${encodeURIComponent(msgId)}`, {
+          method: 'DELETE'
+        });
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function renderContextReactionBar(msg, expanded) {
+      if (!els.msgContextReactions || !msg) return;
+      const list = expanded ? [...QUICK_REACTIONS, ...MORE_REACTIONS] : QUICK_REACTIONS;
+      const reactions = msg.reactions || {};
+      const buttonsHtml = list.map((emoji) => {
+        const users = reactions[emoji] || [];
+        const active = Array.isArray(users) && state.me && users.includes(state.me.username);
+        return `<button type="button" class="msg-ctx-react-btn${active ? ' active' : ''}" data-ctx-react="${escapeHtml(emoji)}" aria-label="React ${escapeHtml(emoji)}">${escapeHtml(emoji)}</button>`;
+      }).join('');
+      const chevron = expanded ? '⌃' : '⌄';
+      const moreBtnHtml = `<button type="button" class="msg-ctx-react-more" data-ctx-more-react="1" aria-label="More reactions">${chevron}</button>`;
+      els.msgContextReactions.innerHTML = buttonsHtml + moreBtnHtml;
+    }
+
+    function positionMessageContextPopup(anchorX, anchorY, isMine) {
+      if (!els.msgContextPopup) return;
+      const popup = els.msgContextPopup;
+      popup.style.left = '0px';
+      popup.style.top = '0px';
+      popup.style.alignItems = isMine ? 'flex-end' : 'flex-start';
+
+      requestAnimationFrame(() => {
+        const vw = window.innerWidth || 360;
+        const vh = window.innerHeight || 640;
+        const rect = popup.getBoundingClientRect();
+        const pad = 12;
+
+        let left = isMine ? (anchorX - rect.width + 24) : (anchorX - 24);
+        left = Math.max(pad, Math.min(vw - rect.width - pad, left));
+
+        let top = anchorY - 56;
+        if (top + rect.height > vh - pad) {
+          top = Math.max(pad, anchorY - rect.height - 8);
+        }
+        if (top < pad) top = pad;
+
+        popup.style.left = `${Math.round(left)}px`;
+        popup.style.top = `${Math.round(top)}px`;
+      });
+    }
+
+    function openMessageContextMenu(msgId, anchorX, anchorY) {
+      const msg = state.messages.find((m) => m.id === msgId);
+      if (!msg || !els.msgContextOverlay || !els.msgContextCard) return;
+
+      closeMessageContextMenu();
+      activeMenuMsgId = msgId;
+      activeMenuExpanded = false;
+
+      const row = $(`msg-${msgId}`);
+      if (row) row.classList.add('menu-active');
+
+      renderContextReactionBar(msg, false);
+
+      const isMine = state.me && msg.sender === state.me.username;
+      const firstAtt = Array.isArray(msg.attachments) && msg.attachments[0] ? msg.attachments[0] : null;
+      const items = [
+        {
+          action: 'reply',
+          label: 'Reply',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>'
+        }
+      ];
+
+      if (msg.text) {
+        items.push({
+          action: 'copy',
+          label: 'Copy',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+        });
+      }
+
+      if (firstAtt) {
+        items.push({
+          action: firstAtt.isImage ? 'open-media' : 'download-file',
+          label: firstAtt.isImage ? 'View Photo' : 'Download File',
+          icon: firstAtt.isImage
+            ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'
+            : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>'
+        });
+      }
+
+      if (isMine) {
+        items.push({
+          action: 'delete',
+          label: 'Delete',
+          danger: true,
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>'
+        });
+      }
+
+      els.msgContextCard.innerHTML = items.map((it) => `
+        <button type="button" class="msg-ctx-item${it.danger ? ' danger' : ''}" data-ctx-action="${it.action}">
+          ${it.icon}
+          <span>${escapeHtml(it.label)}</span>
+        </button>
+      `).join('');
+
+      els.msgContextOverlay.classList.remove('hidden');
+      els.msgContextOverlay.setAttribute('aria-hidden', 'false');
+      positionMessageContextPopup(anchorX, anchorY, Boolean(isMine));
+    }
+
+    if (els.msgContextBackdrop) {
+      els.msgContextBackdrop.addEventListener('click', closeMessageContextMenu);
+    }
+
+    if (els.msgContextReactions) {
+      els.msgContextReactions.addEventListener('click', async (e) => {
+        const moreBtn = e.target.closest('[data-ctx-more-react]');
+        if (moreBtn && activeMenuMsgId) {
+          activeMenuExpanded = !activeMenuExpanded;
+          const msg = state.messages.find((m) => m.id === activeMenuMsgId);
+          renderContextReactionBar(msg, activeMenuExpanded);
+          return;
+        }
+        const reactBtn = e.target.closest('[data-ctx-react]');
+        if (reactBtn && activeMenuMsgId) {
+          const msgId = activeMenuMsgId;
+          const emoji = reactBtn.dataset.ctxReact;
+          closeMessageContextMenu();
+          await toggleReactionOnMessage(msgId, emoji);
+        }
+      });
+    }
+
+    if (els.msgContextCard) {
+      els.msgContextCard.addEventListener('click', async (e) => {
+        const itemBtn = e.target.closest('[data-ctx-action]');
+        if (!itemBtn || !activeMenuMsgId) return;
+        const action = itemBtn.dataset.ctxAction;
+        const msgId = activeMenuMsgId;
+        const msg = state.messages.find((m) => m.id === msgId);
+        closeMessageContextMenu();
+        if (!msg) return;
+
+        if (action === 'reply') {
+          setReply(msgId);
+        } else if (action === 'copy') {
+          await copyMessageText(msg);
+        } else if (action === 'open-media') {
+          const att = msg.attachments && msg.attachments.find((a) => a.isImage);
+          if (att) openLightbox(att.url, att.originalName, msg.sender, msg.text || '');
+        } else if (action === 'download-file') {
+          const att = msg.attachments && msg.attachments[0];
+          if (att) {
+            const a = document.createElement('a');
+            a.href = `${att.url}?download=1`;
+            a.download = att.originalName || 'file';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+        } else if (action === 'delete') {
+          await deleteMessageById(msgId);
+        }
+      });
+    }
+
+    // Message list click & long-press delegation
     const handleMediaOrActionClick = async (e) => {
+      if (Date.now() < suppressNextClickUntil) return;
+
       const lightboxTrigger = e.target.closest('[data-lightbox-url]');
       if (lightboxTrigger) {
         openLightbox(
@@ -2253,22 +2538,6 @@
           lightboxTrigger.dataset.lightboxSender,
           lightboxTrigger.dataset.lightboxCaption || ''
         );
-        return;
-      }
-
-      const replyBtn = e.target.closest('[data-reply-msg]');
-      if (replyBtn) {
-        setReply(replyBtn.dataset.replyMsg);
-        return;
-      }
-
-      const copyBtn = e.target.closest('[data-copy-msg]');
-      if (copyBtn) {
-        const target = state.messages.find((m) => m.id === copyBtn.dataset.copyMsg);
-        if (target && target.text && navigator.clipboard) {
-          await navigator.clipboard.writeText(target.text).catch(() => { });
-          showToast('Message copied to clipboard', 'success');
-        }
         return;
       }
 
@@ -2286,31 +2555,77 @@
 
       const reactBtn = e.target.closest('[data-react-msg]');
       if (reactBtn && state.activeChatId) {
-        try {
-          await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages/${encodeURIComponent(reactBtn.dataset.reactMsg)}/react`, {
-            method: 'POST',
-            body: { emoji: reactBtn.dataset.emoji }
-          });
-        } catch (err) {
-          showToast(err.message, 'error');
-        }
+        await toggleReactionOnMessage(reactBtn.dataset.reactMsg, reactBtn.dataset.emoji);
         return;
       }
 
-      const delBtn = e.target.closest('[data-delete-msg]');
-      if (delBtn && state.activeChatId) {
-        try {
-          await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages/${encodeURIComponent(delBtn.dataset.deleteMsg)}`, {
-            method: 'DELETE'
-          });
-        } catch (err) {
-          showToast(err.message, 'error');
+      // On desktop websites (fine pointer, non-Android), left-clicking a message bubble opens the action + reaction menu
+      if (!isMobileTouchMode() && e.button === 0 && e.currentTarget === els.messagesList) {
+        if (e.target.closest('a, button, video, audio, .msg-actions')) return;
+        const selected = typeof window.getSelection === 'function' ? String(window.getSelection() || '').trim() : '';
+        if (selected.length > 0) return;
+        const bubble = e.target.closest('.msg-bubble');
+        const row = bubble ? bubble.closest('.msg-row[data-msg-id]') : null;
+        if (row && row.dataset.msgId) {
+          openMessageContextMenu(row.dataset.msgId, e.clientX, e.clientY);
         }
       }
     };
 
     els.messagesList.addEventListener('click', handleMediaOrActionClick);
     els.infoSharedContent.addEventListener('click', handleMediaOrActionClick);
+
+    // Long-press on mobile app / touch devices to open the Telegram-style menu & reactions
+    let longPressTimer = null;
+    let longPressStartX = 0;
+    let longPressStartY = 0;
+
+    function clearLongPressTimer() {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    }
+
+    els.messagesList.addEventListener('touchstart', (e) => {
+      clearLongPressTimer();
+      if (!e.touches || e.touches.length !== 1) return;
+      if (e.target.closest('button, video, audio')) return;
+      const bubble = e.target.closest('.msg-bubble');
+      const row = bubble ? bubble.closest('.msg-row[data-msg-id]') : null;
+      if (!row || !row.dataset.msgId) return;
+
+      const touch = e.touches[0];
+      longPressStartX = touch.clientX;
+      longPressStartY = touch.clientY;
+      const msgId = row.dataset.msgId;
+
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        suppressNextClickUntil = Date.now() + 550;
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate(14); } catch { }
+        }
+        openMessageContextMenu(msgId, longPressStartX, longPressStartY);
+      }, 430);
+    }, { passive: true });
+
+    els.messagesList.addEventListener('touchmove', (e) => {
+      if (!longPressTimer || !e.touches || !e.touches[0]) return;
+      const dx = Math.abs(e.touches[0].clientX - longPressStartX);
+      const dy = Math.abs(e.touches[0].clientY - longPressStartY);
+      if (dx > 10 || dy > 10) {
+        clearLongPressTimer();
+      }
+    }, { passive: true });
+
+    els.messagesList.addEventListener('touchend', clearLongPressTimer, { passive: true });
+    els.messagesList.addEventListener('touchcancel', clearLongPressTimer, { passive: true });
+    els.messagesList.addEventListener('contextmenu', (e) => {
+      if (isMobileTouchMode() && e.target.closest('.msg-bubble')) {
+        e.preventDefault();
+      }
+    });
 
     // Composer & File Attachments
     els.attachBtn.addEventListener('click', () => els.fileInput.click());
@@ -2420,34 +2735,112 @@
     els.profileCancelBtn.addEventListener('click', closeProfileModal);
     els.profileModalBackdrop.addEventListener('click', closeProfileModal);
 
+    async function prepareAvatarUpload(file) {
+      if (!file || file.type === 'image/gif' || (!file.type.startsWith('image/') && file.type !== '')) {
+        return { blob: file, filename: (file && file.name) || 'avatar.jpg' };
+      }
+      if (file.size <= 400 * 1024) {
+        return { blob: file, filename: file.name || 'avatar.jpg' };
+      }
+      const objectUrl = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error('Image decode failed'));
+          el.src = objectUrl;
+        });
+        const maxDim = 512;
+        const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || maxDim, img.naturalHeight || maxDim));
+        const width = Math.max(1, Math.round((img.naturalWidth || maxDim) * scale));
+        const height = Math.max(1, Math.round((img.naturalHeight || maxDim) * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx2d = canvas.getContext('2d');
+        if (!ctx2d) {
+          return { blob: file, filename: file.name || 'avatar.jpg' };
+        }
+        ctx2d.drawImage(img, 0, 0, width, height);
+
+        const preferWebp = file.type === 'image/png' || file.type === 'image/webp';
+        let outMime = preferWebp ? 'image/webp' : 'image/jpeg';
+        let outBlob = await new Promise((resolve) => canvas.toBlob(resolve, outMime, 0.88));
+        if (!outBlob || outBlob.type !== outMime) {
+          outMime = 'image/jpeg';
+          outBlob = await new Promise((resolve) => canvas.toBlob(resolve, outMime, 0.88));
+        }
+        if (!outBlob || outBlob.size >= file.size) {
+          return { blob: file, filename: file.name || 'avatar.jpg' };
+        }
+        const baseName = (file.name || 'avatar').replace(/\.[^.]+$/, '');
+        const ext = outMime === 'image/webp' ? '.webp' : '.jpg';
+        return { blob: outBlob, filename: `${baseName}${ext}` };
+      } catch {
+        return { blob: file, filename: file.name || 'avatar.jpg' };
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
     els.profileAvatarInput.addEventListener('change', async () => {
       const file = els.profileAvatarInput.files[0];
       if (!file) return;
-      const fd = new FormData();
-      fd.append('avatar', file, file.name);
+      els.profileAvatarInput.disabled = true;
       try {
+        const prepared = await prepareAvatarUpload(file);
+        const fd = new FormData();
+        fd.append('avatar', prepared.blob, prepared.filename);
         const data = await api('/api/users/me/avatar', { method: 'POST', body: fd });
         state.me = data.user;
-        renderAvatar(els.profileEditAvatar, state.me);
+        syncProfileAvatarControls();
         updateDrawerUserInfo();
         showToast('Avatar updated!', 'success');
       } catch (err) {
         showToast(err.message, 'error');
+      } finally {
+        els.profileAvatarInput.disabled = false;
+        els.profileAvatarInput.value = '';
+      }
+    });
+
+    els.profileRemoveAvatarBtn.addEventListener('click', async () => {
+      if (!state.me || !state.me.avatarUrl) return;
+      els.profileRemoveAvatarBtn.disabled = true;
+      try {
+        const data = await api('/api/users/me/avatar', { method: 'DELETE' });
+        state.me = data.user;
+        syncProfileAvatarControls();
+        updateDrawerUserInfo();
+        showToast('Profile picture removed!', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        els.profileRemoveAvatarBtn.disabled = false;
       }
     });
 
     els.profileForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
+        const payload = {
+          displayName: els.profileDisplayName.value.trim(),
+          bio: els.profileBio.value.trim()
+        };
+        if (els.profileUsername) {
+          payload.username = els.profileUsername.value.trim().toLowerCase();
+        }
         const data = await api('/api/users/me', {
           method: 'PATCH',
-          body: {
-            displayName: els.profileDisplayName.value.trim(),
-            bio: els.profileBio.value.trim()
-          }
+          body: payload
         });
         state.me = data.user;
         updateDrawerUserInfo();
+        if (data.renamedFrom && state.activePeer) {
+          await openChatWithUser(state.activePeer.username);
+        }
+        await refreshChats();
         closeProfileModal();
         showToast('Profile saved!', 'success');
       } catch (err) {
@@ -2469,6 +2862,7 @@
         return;
       }
       if (e.key === 'Escape') {
+        closeMessageContextMenu();
         closeLightbox();
         closeProfileModal();
         closeSettingsModal();
@@ -2541,8 +2935,16 @@
     updateAppUpdateUI();
   };
   window.__telechatHandleBack = () => {
+    if (els.msgContextOverlay && !els.msgContextOverlay.classList.contains('hidden')) { closeMessageContextMenu(); return true; }
     if (!els.lightboxModal.classList.contains('hidden')) { closeLightbox(); return true; }
-    if (!els.settingsModal.classList.contains('hidden')) { closeSettingsModal(); return true; }
+    if (!els.settingsModal.classList.contains('hidden')) {
+      if (isMobileSettingsViewport() && settingsMobileView === 'detail') {
+        showSettingsMobileMenu();
+      } else {
+        closeSettingsModal();
+      }
+      return true;
+    }
     if (!els.profileModal.classList.contains('hidden')) { closeProfileModal(); return true; }
     if (els.navDrawer.classList.contains('open')) { closeDrawer(); return true; }
     if (state.infoOpen) { toggleInfoDrawer(false); return true; }

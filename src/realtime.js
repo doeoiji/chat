@@ -6,6 +6,7 @@
 function createRealtimeHub() {
   // Map<username, Set<ServerResponse>>
   const clients = new Map();
+  const clientOwners = new WeakMap();
 
   function sendEvent(res, eventName, data) {
     try {
@@ -16,6 +17,7 @@ function createRealtimeHub() {
   }
 
   function addClient(username, res) {
+    clientOwners.set(res, username);
     let set = clients.get(username);
     const wasOffline = !set || set.size === 0;
     if (!set) {
@@ -37,16 +39,36 @@ function createRealtimeHub() {
       wasOffline,
       remove() {
         clearInterval(heartbeat);
-        const current = clients.get(username);
+        const owner = clientOwners.get(res) || username;
+        const current = clients.get(owner);
         if (!current) return false;
         current.delete(res);
         if (current.size === 0) {
-          clients.delete(username);
+          clients.delete(owner);
           return true; // became offline
         }
         return false;
       }
     };
+  }
+
+  function renameUser(oldUsername, newUsername) {
+    if (!oldUsername || !newUsername || oldUsername === newUsername) return;
+    const oldSet = clients.get(oldUsername);
+    if (!oldSet || oldSet.size === 0) {
+      clients.delete(oldUsername);
+      return;
+    }
+    let targetSet = clients.get(newUsername);
+    if (!targetSet) {
+      targetSet = new Set();
+      clients.set(newUsername, targetSet);
+    }
+    for (const res of oldSet) {
+      clientOwners.set(res, newUsername);
+      targetSet.add(res);
+    }
+    clients.delete(oldUsername);
   }
 
   function isOnline(username) {
@@ -82,6 +104,7 @@ function createRealtimeHub() {
 
   return {
     addClient,
+    renameUser,
     isOnline,
     getOnlineUsernames,
     emitToUser,

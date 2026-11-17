@@ -250,18 +250,32 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         return sendJson(res, 200, { user: enrichUser(me) });
       }
 
-      // Update current user profile
+      // Update current user profile (username, displayName, bio)
       if (method === 'PATCH' && pathname === '/api/users/me') {
         const me = await requireAuth(req, res);
         if (!me) return;
         const body = await readJsonBody(req);
-        const updated = await storage.updateUserProfile(me.username, {
+        const result = await storage.updateAccountProfile(me.username, {
+          username: body.username,
           displayName: body.displayName,
           bio: body.bio
         });
-        const enriched = enrichUser(updated);
-        hub.broadcastAll('profile_updated', { user: enriched });
-        return sendJson(res, 200, { user: enriched });
+        const extraHeaders = {};
+        if (result.renamed && result.user) {
+          hub.renameUser(result.previousUsername, result.user.username);
+          extraHeaders['Set-Cookie'] = auth.createSessionCookie(result.user.username);
+        }
+        const enriched = enrichUser(result.user);
+        hub.broadcastAll('profile_updated', {
+          user: enriched,
+          previousUsername: result.previousUsername,
+          chatRenames: result.chatRenames
+        });
+        return sendJson(res, 200, {
+          user: enriched,
+          renamedFrom: result.renamed ? result.previousUsername : null,
+          chatRenames: result.chatRenames
+        }, extraHeaders);
       }
 
       // Upload avatar
@@ -272,13 +286,23 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         if (!contentType.includes('multipart/form-data')) {
           return sendJson(res, 400, { error: 'Expected multipart/form-data.' });
         }
-        const buf = await readBodyBuffer(req, Math.min(config.maxUploadBytes, 8 * 1024 * 1024));
+        const buf = await readBodyBuffer(req, config.maxUploadBytes);
         const { files } = parseMultipart(buf, contentType);
         const file = files[0];
         if (!file || !file.mimeType.startsWith('image/') || file.mimeType === 'image/svg+xml') {
           return sendJson(res, 400, { error: 'Please upload a valid PNG, JPG, GIF, or WebP image.' });
         }
         const updated = await storage.saveUserAvatar(me.username, file);
+        const enriched = enrichUser(updated);
+        hub.broadcastAll('profile_updated', { user: enriched });
+        return sendJson(res, 200, { user: enriched });
+      }
+
+      // Remove avatar
+      if (method === 'DELETE' && pathname === '/api/users/me/avatar') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const updated = await storage.removeUserAvatar(me.username);
         const enriched = enrichUser(updated);
         hub.broadcastAll('profile_updated', { user: enriched });
         return sendJson(res, 200, { user: enriched });
@@ -571,7 +595,12 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         console.error('[VibeRoom Error]', err);
       }
       if (!res.headersSent) {
-        sendJson(res, status, { error: err.message || 'Internal server error.' });
+        sendJson(
+          res,
+          status,
+          { error: err.message || 'Internal server error.' },
+          status === 413 ? { Connection: 'close' } : {}
+        );
       }
     }
   };
