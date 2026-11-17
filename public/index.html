@@ -177,6 +177,11 @@
           <span class="drawer-item-icon">⚙️</span>
           <span>Settings</span>
         </button>
+        <button id="menu-app-update" class="drawer-item hidden" type="button">
+          <span class="drawer-item-icon">📲</span>
+          <span>App Update</span>
+          <span id="drawer-update-badge" class="drawer-update-badge hidden">New</span>
+        </button>
         <button id="menu-toggle-theme" class="drawer-item" type="button">
           <span class="drawer-item-icon">🌓</span>
           <span id="menu-theme-label">Switch to Light Mode</span>
@@ -223,6 +228,17 @@
           </svg>
         </button>
       </header>
+
+      <div id="app-update-banner" class="app-update-banner hidden" role="button" tabindex="0">
+        <div class="app-update-banner-left">
+          <span class="app-update-warn-icon">⚠️</span>
+          <div class="app-update-banner-text">
+            <strong id="app-update-banner-title">App Update Available</strong>
+            <span id="app-update-banner-sub">Tap to open Update tab and install</span>
+          </div>
+        </div>
+        <span class="app-update-banner-cta">Update ›</span>
+      </div>
 
       <div id="notif-banner" class="notif-banner hidden">
         <div class="notif-banner-text">
@@ -498,6 +514,15 @@
             </span>
             <span class="settings-nav-arrow">›</span>
           </button>
+          <button id="settings-tab-updates" class="settings-nav-item hidden" type="button" data-settings-tab="updates">
+            <span class="settings-nav-icon">📲</span>
+            <span class="settings-nav-text">
+              <strong>App Update</strong>
+              <small id="settings-nav-update-sub">Check for Android APK updates</small>
+            </span>
+            <span id="settings-nav-update-dot" class="update-dot hidden"></span>
+            <span class="settings-nav-arrow">›</span>
+          </button>
         </aside>
 
         <!-- Settings Content Panels -->
@@ -646,6 +671,37 @@
 
             <div class="settings-reset-wrap">
               <button id="settings-reset-btn" class="secondary-btn" type="button">Reset Appearance to Defaults</button>
+            </div>
+          </section>
+
+          <!-- Android App Update Panel -->
+          <section id="settings-panel-updates" class="settings-panel hidden">
+            <div class="settings-section-label">Android App Version</div>
+            <div class="update-status-card">
+              <div class="update-version-row">
+                <div>
+                  <div class="update-version-title">TeleChat for Android</div>
+                  <div id="update-version-meta" class="update-version-meta">Installed: v1.0.0</div>
+                </div>
+                <span id="update-status-pill" class="update-status-pill">Up to date</span>
+              </div>
+              <div id="update-notes-box" class="update-notes-box hidden"></div>
+              <div id="update-progress-wrap" class="update-dl-wrap hidden">
+                <div class="update-dl-track">
+                  <div id="update-progress-bar" class="update-dl-bar"></div>
+                </div>
+                <div id="update-progress-text" class="update-dl-text">Downloading... 0%</div>
+              </div>
+              <div id="update-error-msg" class="form-error hidden"></div>
+            </div>
+
+            <div class="update-actions-row">
+              <button id="update-install-btn" class="primary-btn hidden" type="button">Download &amp; Install Update</button>
+              <button id="update-check-btn" class="secondary-btn" type="button">Check for Updates</button>
+            </div>
+
+            <div class="update-footnote">
+              Website UI &amp; chat improvements update automatically. Native APK updates only appear when a new Android version is released on GitHub, and the downloaded APK is auto-deleted after updating to keep storage free.
             </div>
           </section>
         </div>

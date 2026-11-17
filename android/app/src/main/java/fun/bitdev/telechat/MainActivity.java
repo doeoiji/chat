@@ -36,6 +36,8 @@ public class MainActivity extends Activity {
     private String baseUrl;
     private String baseHost;
     private String pendingOpenChatId;
+    private boolean pendingOpenUpdates = false;
+    private UpdateManager updateManager;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -120,7 +122,13 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 CookieManager.getInstance().flush();
-                if (pendingOpenChatId != null) {
+                if (updateManager != null) {
+                    pushUpdateStateToWebView(updateManager.toStateJson());
+                }
+                if (pendingOpenUpdates) {
+                    pendingOpenUpdates = false;
+                    openUpdatesInWebView();
+                } else if (pendingOpenChatId != null) {
                     String chatId = pendingOpenChatId;
                     pendingOpenChatId = null;
                     openChatInWebView(chatId);
@@ -154,15 +162,23 @@ public class MainActivity extends Activity {
             }
         });
 
+        updateManager = new UpdateManager(this, this::pushUpdateStateToWebView);
+        updateManager.cleanupOldApks(true);
+
         requestNotificationPermissionIfNeeded();
         startMessageServiceIfPermitted();
         handleIntent(getIntent());
         webView.loadUrl(baseUrl);
+        updateManager.checkForUpdate(false, true);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (updateManager != null) {
+            updateManager.onActivityResumed(this);
+            pushUpdateStateToWebView(updateManager.toStateJson());
+        }
         if (webView != null) {
             webView.onResume();
             webView.evaluateJavascript("if (window.__telechatSyncState) window.__telechatSyncState(true);", null);
@@ -187,6 +203,14 @@ public class MainActivity extends Activity {
 
     private void handleIntent(Intent intent) {
         if (intent == null) return;
+        if (intent.getBooleanExtra(UpdateManager.EXTRA_OPEN_UPDATES, false)) {
+            if (webView != null && webView.getProgress() == 100) {
+                openUpdatesInWebView();
+            } else {
+                pendingOpenUpdates = true;
+            }
+            return;
+        }
         String chatId = intent.getStringExtra(MessageService.EXTRA_CHAT_ID);
         if (chatId != null && !chatId.isEmpty()) {
             if (webView != null && webView.getProgress() == 100) {
@@ -195,6 +219,23 @@ public class MainActivity extends Activity {
                 pendingOpenChatId = chatId;
             }
         }
+    }
+
+    private void openUpdatesInWebView() {
+        if (webView == null) return;
+        webView.post(() -> webView.evaluateJavascript(
+            "if (window.__telechatOpenUpdates) { window.__telechatOpenUpdates(); }",
+            null
+        ));
+    }
+
+    private void pushUpdateStateToWebView(JSONObject stateJson) {
+        if (webView == null || stateJson == null) return;
+        String payload = stateJson.toString();
+        webView.post(() -> webView.evaluateJavascript(
+            "if (window.__telechatOnUpdateStatus) { window.__telechatOnUpdateStatus(" + payload + "); }",
+            null
+        ));
     }
 
     private void openChatInWebView(String chatId) {
@@ -288,6 +329,30 @@ public class MainActivity extends Activity {
             MessageService.updateAppState(username, chatId, isForeground);
             if (username != null && !username.isEmpty()) {
                 runOnUiThread(MainActivity.this::startMessageServiceIfPermitted);
+            }
+        }
+
+        @JavascriptInterface
+        public String getAppVersionName() {
+            return updateManager != null ? updateManager.getInstalledVersionName() : "1.0.0";
+        }
+
+        @JavascriptInterface
+        public String getUpdateStateJson() {
+            return updateManager != null ? updateManager.toStateJson().toString() : "{}";
+        }
+
+        @JavascriptInterface
+        public void checkForAppUpdate(boolean manual) {
+            if (updateManager != null) {
+                updateManager.checkForUpdate(manual, !manual);
+            }
+        }
+
+        @JavascriptInterface
+        public void startAppUpdate() {
+            if (updateManager != null) {
+                runOnUiThread(() -> updateManager.startDownloadAndInstall(MainActivity.this));
             }
         }
 

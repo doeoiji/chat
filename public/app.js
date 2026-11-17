@@ -108,6 +108,8 @@
     menuFindUsers: $('menu-find-users'),
     menuEditProfile: $('menu-edit-profile'),
     menuSettings: $('menu-settings'),
+    menuAppUpdate: $('menu-app-update'),
+    drawerUpdateBadge: $('drawer-update-badge'),
     menuToggleTheme: $('menu-toggle-theme'),
     menuThemeLabel: $('menu-theme-label'),
     menuLogout: $('menu-logout'),
@@ -115,6 +117,9 @@
     sidebarSearch: $('sidebar-search'),
     clearSearchBtn: $('clear-search-btn'),
     browseUsersBtn: $('browse-users-btn'),
+    appUpdateBanner: $('app-update-banner'),
+    appUpdateBannerTitle: $('app-update-banner-title'),
+    appUpdateBannerSub: $('app-update-banner-sub'),
     notifBanner: $('notif-banner'),
     notifAllowBtn: $('notif-allow-btn'),
     notifDismissBtn: $('notif-dismiss-btn'),
@@ -215,6 +220,19 @@
     notifStatusHint: $('notif-status-hint'),
     testNotifBtn: $('test-notif-btn'),
     settingsResetBtn: $('settings-reset-btn'),
+
+    settingsTabUpdates: $('settings-tab-updates'),
+    settingsNavUpdateSub: $('settings-nav-update-sub'),
+    settingsNavUpdateDot: $('settings-nav-update-dot'),
+    updateVersionMeta: $('update-version-meta'),
+    updateStatusPill: $('update-status-pill'),
+    updateNotesBox: $('update-notes-box'),
+    updateProgressWrap: $('update-progress-wrap'),
+    updateProgressBar: $('update-progress-bar'),
+    updateProgressText: $('update-progress-text'),
+    updateErrorMsg: $('update-error-msg'),
+    updateInstallBtn: $('update-install-btn'),
+    updateCheckBtn: $('update-check-btn'),
 
     toastContainer: $('toast-container')
   };
@@ -623,17 +641,138 @@
   }
 
   function switchSettingsTab(tab) {
-    const valid = ['general', 'themes', 'chat'].includes(tab) ? tab : 'general';
+    const valid = ['general', 'themes', 'chat', 'updates'].includes(tab) ? tab : 'general';
     els.settingsNav.querySelectorAll('[data-settings-tab]').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.settingsTab === valid);
     });
-    ['general', 'themes', 'chat'].forEach((name) => {
+    ['general', 'themes', 'chat', 'updates'].forEach((name) => {
       const panel = $(`settings-panel-${name}`);
       if (panel) panel.classList.toggle('hidden', name !== valid);
     });
-    const titles = { general: 'Settings', themes: 'Settings — Themes', chat: 'Settings — Sounds & Behavior' };
+    const titles = {
+      general: 'Settings',
+      themes: 'Settings — Themes',
+      chat: 'Settings — Sounds & Behavior',
+      updates: 'Settings — App Update'
+    };
     els.settingsModalTitle.textContent = titles[valid] || 'Settings';
     els.settingsBackBtn.classList.toggle('hidden', valid === 'general');
+  }
+
+  let appUpdateState = null;
+  function hasAndroidUpdater() {
+    return Boolean(window.AndroidBridge && typeof window.AndroidBridge.checkForAppUpdate === 'function');
+  }
+
+  function updateAppUpdateUI(info) {
+    const hasUpdater = hasAndroidUpdater();
+    if (els.menuAppUpdate) els.menuAppUpdate.classList.toggle('hidden', !hasUpdater);
+    if (els.settingsTabUpdates) els.settingsTabUpdates.classList.toggle('hidden', !hasUpdater);
+    if (!hasUpdater) {
+      if (els.appUpdateBanner) els.appUpdateBanner.classList.add('hidden');
+      return;
+    }
+
+    if (info && typeof info === 'object') {
+      appUpdateState = info;
+    } else if (!appUpdateState && typeof window.AndroidBridge.getUpdateStateJson === 'function') {
+      try {
+        appUpdateState = JSON.parse(window.AndroidBridge.getUpdateStateJson() || '{}');
+      } catch {
+        appUpdateState = {};
+      }
+    }
+
+    const st = appUpdateState || {};
+    const curVer = st.currentVersion || (typeof window.AndroidBridge.getAppVersionName === 'function' ? window.AndroidBridge.getAppVersionName() : '1.0.0');
+    const latestVer = st.latestVersion || curVer;
+    const available = Boolean(st.available);
+    const status = st.status || (available ? 'available' : 'up_to_date');
+    const progress = Number(st.progress || 0);
+    const sizeLabel = st.sizeBytes ? ` (${formatBytes(st.sizeBytes)})` : '';
+
+    if (els.drawerUpdateBadge) els.drawerUpdateBadge.classList.toggle('hidden', !available);
+    if (els.settingsNavUpdateDot) els.settingsNavUpdateDot.classList.toggle('hidden', !available);
+    if (els.settingsNavUpdateSub) {
+      els.settingsNavUpdateSub.textContent = available ? `v${latestVer} available` : `Installed: v${curVer}`;
+    }
+
+    if (els.appUpdateBanner) {
+      els.appUpdateBanner.classList.toggle('hidden', !available || status === 'downloading' || status === 'installing');
+      if (available) {
+        if (els.appUpdateBannerTitle) els.appUpdateBannerTitle.textContent = `App update v${latestVer} available`;
+        if (els.appUpdateBannerSub) els.appUpdateBannerSub.textContent = `Current: v${curVer} • Tap to update`;
+      }
+    }
+
+    if (els.updateVersionMeta) {
+      els.updateVersionMeta.textContent = available
+        ? `Installed: v${curVer} → New: v${latestVer}${sizeLabel}`
+        : `Installed: v${curVer}${latestVer ? ` • Latest: v${latestVer}` : ''}`;
+    }
+
+    if (els.updateStatusPill) {
+      els.updateStatusPill.className = 'update-status-pill';
+      if (status === 'downloading') {
+        els.updateStatusPill.textContent = `Downloading ${progress}%`;
+        els.updateStatusPill.classList.add('available');
+      } else if (status === 'installing') {
+        els.updateStatusPill.textContent = 'Ready to install';
+        els.updateStatusPill.classList.add('available');
+      } else if (status === 'permission_needed') {
+        els.updateStatusPill.textContent = 'Permission needed';
+        els.updateStatusPill.classList.add('available');
+      } else if (status === 'checking') {
+        els.updateStatusPill.textContent = 'Checking...';
+      } else if (available) {
+        els.updateStatusPill.textContent = `v${latestVer} available`;
+        els.updateStatusPill.classList.add('available');
+      } else {
+        els.updateStatusPill.textContent = 'Up to date';
+      }
+    }
+
+    if (els.updateNotesBox) {
+      if (st.notes && available) {
+        els.updateNotesBox.textContent = st.notes;
+        els.updateNotesBox.classList.remove('hidden');
+      } else {
+        els.updateNotesBox.classList.add('hidden');
+      }
+    }
+
+    if (els.updateProgressWrap) {
+      const showProg = status === 'downloading' || status === 'installing';
+      els.updateProgressWrap.classList.toggle('hidden', !showProg);
+      if (els.updateProgressBar) els.updateProgressBar.style.width = `${progress}%`;
+      if (els.updateProgressText) {
+        els.updateProgressText.textContent = status === 'installing'
+          ? 'Opening Android installer...'
+          : `Downloading APK from GitHub... ${progress}%`;
+      }
+    }
+
+    if (els.updateErrorMsg) {
+      if (status === 'error' && st.error) {
+        els.updateErrorMsg.textContent = st.error;
+        els.updateErrorMsg.classList.remove('hidden');
+      } else {
+        els.updateErrorMsg.classList.add('hidden');
+      }
+    }
+
+    if (els.updateInstallBtn) {
+      els.updateInstallBtn.classList.toggle('hidden', !available);
+      els.updateInstallBtn.disabled = status === 'downloading' || status === 'installing';
+      els.updateInstallBtn.textContent = status === 'permission_needed'
+        ? 'Allow App Installs & Continue'
+        : (status === 'downloading' ? `Downloading (${progress}%)...` : 'Download & Install Update');
+    }
+
+    if (els.updateCheckBtn) {
+      els.updateCheckBtn.disabled = status === 'checking' || status === 'downloading';
+      els.updateCheckBtn.textContent = status === 'checking' ? 'Checking...' : 'Check for Updates';
+    }
   }
 
   // =========================================================================
@@ -1791,6 +1930,20 @@
       closeDrawer();
       openSettingsModal('general');
     });
+    els.menuAppUpdate.addEventListener('click', () => {
+      closeDrawer();
+      openSettingsModal('updates');
+      if (hasAndroidUpdater()) window.AndroidBridge.checkForAppUpdate(true);
+    });
+    els.appUpdateBanner.addEventListener('click', () => {
+      openSettingsModal('updates');
+    });
+    els.updateCheckBtn.addEventListener('click', () => {
+      if (hasAndroidUpdater()) window.AndroidBridge.checkForAppUpdate(true);
+    });
+    els.updateInstallBtn.addEventListener('click', () => {
+      if (hasAndroidUpdater()) window.AndroidBridge.startAppUpdate();
+    });
     els.menuFindUsers.addEventListener('click', () => {
       closeDrawer();
       triggerBrowseUsers();
@@ -2382,6 +2535,11 @@
   // Expose clean hooks for the Android WebView wrapper
   window.__telechatSyncState = (isFg) => syncAndroidState(isFg);
   window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
+  window.__telechatOnUpdateStatus = (info) => updateAppUpdateUI(info);
+  window.__telechatOpenUpdates = () => {
+    openSettingsModal('updates');
+    updateAppUpdateUI();
+  };
   window.__telechatHandleBack = () => {
     if (!els.lightboxModal.classList.contains('hidden')) { closeLightbox(); return true; }
     if (!els.settingsModal.classList.contains('hidden')) { closeSettingsModal(); return true; }
@@ -2406,6 +2564,7 @@
     registerServiceWorker();
     initEmojiPopover();
     wireEvents();
+    updateAppUpdateUI();
 
     try {
       const data = await api('/api/auth/me');

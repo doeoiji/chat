@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">TeleChat</string>
     <string name="app_url">https://chat.bitdev.fun</string>
+    <string name="github_repo">doeoiji/chat</string>
 </resources>
