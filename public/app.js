@@ -52,6 +52,9 @@
     theme: localStorage.getItem('telechat_theme') || 'dark',
     prefs: loadPrefs(),
     drafts: loadDrafts(),
+    scrollPositions: loadScrollPositions(),
+    pinToBottomUntil: 0,
+    userScrolledSinceOpen: false,
     pendingShare: null,
     queuedAndroidShare: null,
     sending: false,
@@ -425,6 +428,102 @@
     } catch {
       return {};
     }
+  }
+
+  function loadScrollPositions() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('viberoom_scroll') || '{}');
+      return raw && typeof raw === 'object' ? raw : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveCurrentChatScroll() {
+    const chatId = state.activeChatId;
+    const vp = els.messagesViewport;
+    if (!chatId || !vp) return;
+
+    if (isNearBottom(60)) {
+      state.scrollPositions[chatId] = { atBottom: true, updatedAt: Date.now() };
+    } else {
+      const vpRect = typeof vp.getBoundingClientRect === 'function' ? vp.getBoundingClientRect() : null;
+      let anchorMsgId = null;
+      let offsetPx = 0;
+      if (vpRect && els.messagesList) {
+        const rows = els.messagesList.querySelectorAll('.msg-row[data-msg-id]');
+        for (const row of rows) {
+          const r = row.getBoundingClientRect();
+          if (r.bottom >= vpRect.top + 8) {
+            anchorMsgId = row.dataset.msgId;
+            offsetPx = Math.round(r.top - vpRect.top);
+            break;
+          }
+        }
+      }
+      if (anchorMsgId) {
+        state.scrollPositions[chatId] = { atBottom: false, anchorMsgId, offsetPx, updatedAt: Date.now() };
+      } else {
+        state.scrollPositions[chatId] = { atBottom: true, updatedAt: Date.now() };
+      }
+    }
+
+    try {
+      localStorage.setItem('viberoom_scroll', JSON.stringify(state.scrollPositions));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
+  function instantScrollToBottom() {
+    const vp = els.messagesViewport;
+    if (!vp) return;
+    const prevBehavior = vp.style.scrollBehavior;
+    vp.style.scrollBehavior = 'auto';
+    vp.scrollTop = vp.scrollHeight;
+    vp.style.scrollBehavior = prevBehavior;
+  }
+
+  function restoreChatScrollPosition(chatId) {
+    const vp = els.messagesViewport;
+    if (!vp) return;
+    const saved = state.scrollPositions[chatId];
+
+    // If user explicitly left scrolled up to an older message (and no unread divider supersedes it),
+    // restore to that exact message; otherwise pin cleanly at the bottom.
+    if (saved && saved.atBottom === false && saved.anchorMsgId && !state.firstUnreadMsgId) {
+      const anchorEl = $(`msg-${saved.anchorMsgId}`);
+      if (anchorEl && typeof vp.getBoundingClientRect === 'function') {
+        state.pinToBottomUntil = 0;
+        const applyAnchor = () => {
+          const vpRect = vp.getBoundingClientRect();
+          const rowRect = anchorEl.getBoundingClientRect();
+          const prevBehavior = vp.style.scrollBehavior;
+          vp.style.scrollBehavior = 'auto';
+          vp.scrollTop += (rowRect.top - vpRect.top) - (saved.offsetPx || 0);
+          vp.style.scrollBehavior = prevBehavior;
+        };
+        requestAnimationFrame(applyAnchor);
+        setTimeout(() => {
+          if (!state.userScrolledSinceOpen && state.activeChatId === chatId) applyAnchor();
+        }, 120);
+        return;
+      }
+    }
+
+    // Default / was at bottom when leaving: snap cleanly to bottom and keep pinned while images load
+    state.pinToBottomUntil = Date.now() + 2600;
+    state.userScrolledSinceOpen = false;
+    instantScrollToBottom();
+    requestAnimationFrame(() => {
+      if (!state.userScrolledSinceOpen && state.activeChatId === chatId) instantScrollToBottom();
+    });
+    setTimeout(() => {
+      if (!state.userScrolledSinceOpen && state.activeChatId === chatId) instantScrollToBottom();
+    }, 120);
+    setTimeout(() => {
+      if (!state.userScrolledSinceOpen && state.activeChatId === chatId) instantScrollToBottom();
+    }, 340);
   }
 
   function saveChatDraft(chatId, rawText) {
@@ -1336,8 +1435,11 @@
 
   async function openChatWithUser(targetUsername) {
     try {
-      if (state.activeChatId && els.messageInput) {
-        saveChatDraft(state.activeChatId, els.messageInput.value);
+      if (state.activeChatId) {
+        saveCurrentChatScroll();
+        if (els.messageInput) {
+          saveChatDraft(state.activeChatId, els.messageInput.value);
+        }
       }
       const data = await api('/api/chats/open', {
         method: 'POST',
@@ -1348,6 +1450,7 @@
       state.activePeer = data.chat.peer;
       state.messages = data.messages || [];
       state.unreadBelowCount = 0;
+      state.userScrolledSinceOpen = false;
       const firstUnread = state.me
         ? state.messages.find((m) => m.sender !== state.me.username && (!Array.isArray(m.readBy) || !m.readBy.includes(state.me.username)))
         : null;
@@ -1361,7 +1464,6 @@
 
       const savedDraft = state.drafts[state.activeChatId];
       els.messageInput.value = savedDraft && savedDraft.text ? savedDraft.text : '';
-      autoResizeInput();
       if (state.pendingShare) {
         await applyPendingShareToActiveChat();
       }
@@ -1372,11 +1474,16 @@
       els.activeChat.classList.remove('hidden');
       els.appShell.classList.add('mobile-chat-open');
 
+      // Resize composer ONLY after #active-chat is visible so scrollHeight is never 0px
+      autoResizeInput();
+      requestAnimationFrame(() => autoResizeInput());
+
       renderAvatar(els.chatPeerAvatar, state.activePeer);
       els.chatPeerName.textContent = state.activePeer.displayName || state.activePeer.username;
       updateChatHeaderStatus();
 
-      renderMessages(true);
+      renderMessages(false);
+      restoreChatScrollPosition(state.activeChatId);
       if (state.infoOpen) renderInfoDrawer();
       renderSidebar();
 
@@ -1541,15 +1648,18 @@
     els.messagesList.innerHTML = htmlParts.join('');
 
     if (scrollToBottom) {
+      state.pinToBottomUntil = Date.now() + 1800;
+      state.userScrolledSinceOpen = false;
+      instantScrollToBottom();
       requestAnimationFrame(() => {
-        els.messagesViewport.scrollTop = els.messagesViewport.scrollHeight;
+        if (!state.userScrolledSinceOpen) instantScrollToBottom();
       });
     }
   }
 
-  function isNearBottom() {
+  function isNearBottom(threshold = 140) {
     const vp = els.messagesViewport;
-    return vp.scrollHeight - vp.scrollTop - vp.clientHeight < 140;
+    return vp.scrollHeight - vp.scrollTop - vp.clientHeight < threshold;
   }
 
   // =========================================================================
@@ -1645,13 +1755,23 @@
 
   async function sendMessage() {
     if (!state.activeChatId || state.sending) return;
-    const text = els.messageInput.value.trim();
+    const rawValue = els.messageInput.value;
+    const text = rawValue.trim();
     const hasFiles = state.pendingFiles.length > 0;
     if (!text && !hasFiles) return;
 
+    const wasInputFocused = typeof document !== 'undefined' && document.activeElement === els.messageInput;
     state.sending = true;
     const chatId = state.activeChatId;
     const replyToId = state.replyTo ? state.replyTo.id : null;
+
+    // Clear text input synchronously so the user can keep typing without keyboard flicker
+    els.messageInput.value = '';
+    saveChatDraft(chatId, '');
+    autoResizeInput();
+    if (wasInputFocused && document.activeElement !== els.messageInput) {
+      els.messageInput.focus({ preventScroll: true });
+    }
 
     try {
       sendTypingSignal(false);
@@ -1671,9 +1791,6 @@
         });
       }
 
-      els.messageInput.value = '';
-      saveChatDraft(chatId, '');
-      autoResizeInput();
       clearPendingFiles();
       clearReply();
 
@@ -1686,16 +1803,31 @@
       playChime('send');
       await refreshChats();
     } catch (err) {
+      if (!els.messageInput.value && rawValue && state.activeChatId === chatId) {
+        els.messageInput.value = rawValue;
+        saveChatDraft(chatId, rawValue);
+        autoResizeInput();
+      }
       showToast(err.message, 'error');
     } finally {
       state.sending = false;
+      if (wasInputFocused && typeof document !== 'undefined' && document.activeElement !== els.messageInput) {
+        try { els.messageInput.focus({ preventScroll: true }); } catch { }
+      }
     }
   }
 
   function autoResizeInput() {
     const el = els.messageInput;
+    if (!el) return;
+    if (!el.value) {
+      el.style.height = '';
+      return;
+    }
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    if (el.scrollHeight > 0) {
+      el.style.height = `${Math.max(38, Math.min(el.scrollHeight, 140))}px`;
+    }
   }
 
   function setReply(msgId) {
@@ -2302,7 +2434,11 @@
       closeDrawer();
       clearPendingShare(true);
       state.drafts = {};
-      try { localStorage.removeItem('viberoom_drafts'); } catch { }
+      state.scrollPositions = {};
+      try {
+        localStorage.removeItem('viberoom_drafts');
+        localStorage.removeItem('viberoom_scroll');
+      } catch { }
       await api('/api/auth/logout', { method: 'POST' }).catch(() => { });
       if (state.eventSource) state.eventSource.close();
       state.me = null;
@@ -2520,6 +2656,7 @@
 
     // Mobile back button
     els.mobileBackBtn.addEventListener('click', () => {
+      saveCurrentChatScroll();
       els.appShell.classList.remove('mobile-chat-open');
       state.activeChatId = null;
       syncAndroidState();
@@ -2624,23 +2761,59 @@
       renderInfoDrawer();
     });
 
-    // Scroll to bottom button
+    // Scroll to bottom, scroll persistence & image-load bottom pinning
+    let scrollSaveTimer = null;
+    const markUserScrolled = () => {
+      if (!isNearBottom(90)) {
+        state.userScrolledSinceOpen = true;
+        state.pinToBottomUntil = 0;
+      }
+    };
+    els.messagesViewport.addEventListener('wheel', () => {
+      state.userScrolledSinceOpen = true;
+      state.pinToBottomUntil = 0;
+    }, { passive: true });
+    els.messagesViewport.addEventListener('touchmove', markUserScrolled, { passive: true });
+
     els.messagesViewport.addEventListener('scroll', () => {
       const nearBottom = isNearBottom();
       els.scrollBottomBtn.classList.toggle('hidden', nearBottom);
+      if (!nearBottom && Date.now() > state.pinToBottomUntil) {
+        state.userScrolledSinceOpen = true;
+      }
       if (nearBottom && state.unreadBelowCount > 0) {
         state.unreadBelowCount = 0;
         updateGlobalUnreadCounters();
         markActiveChatRead();
       }
+      clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = setTimeout(saveCurrentChatScroll, 180);
     });
+
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(() => {
+        if (state.activeChatId && !state.userScrolledSinceOpen && Date.now() < state.pinToBottomUntil) {
+          instantScrollToBottom();
+        }
+      });
+      ro.observe(els.messagesList);
+    }
+    els.messagesList.addEventListener('load', () => {
+      if (state.activeChatId && !state.userScrolledSinceOpen && Date.now() < state.pinToBottomUntil) {
+        instantScrollToBottom();
+      }
+    }, true);
+
     els.scrollBottomBtn.addEventListener('click', () => {
+      state.pinToBottomUntil = Date.now() + 800;
+      state.userScrolledSinceOpen = false;
       els.messagesViewport.scrollTo({ top: els.messagesViewport.scrollHeight, behavior: 'smooth' });
       if (state.unreadBelowCount > 0) {
         state.unreadBelowCount = 0;
         updateGlobalUnreadCounters();
         markActiveChatRead();
       }
+      setTimeout(saveCurrentChatScroll, 300);
     });
 
     // Telegram-style Message Context Menu (Left-click on Desktop Website / Long-press on Mobile App)
@@ -3028,7 +3201,30 @@
       if (btn) removePendingFile(Number(btn.dataset.removeFile));
     });
 
+    const keepInputFocusOnTap = (e) => {
+      if (typeof document !== 'undefined' && document.activeElement === els.messageInput) {
+        e.preventDefault();
+      }
+    };
+    els.cancelReplyBtn.addEventListener('pointerdown', keepInputFocusOnTap);
+    els.cancelReplyBtn.addEventListener('mousedown', keepInputFocusOnTap);
     els.cancelReplyBtn.addEventListener('click', clearReply);
+
+    els.sendBtn.addEventListener('pointerdown', keepInputFocusOnTap);
+    els.sendBtn.addEventListener('mousedown', keepInputFocusOnTap);
+    els.sendBtn.addEventListener('touchend', (e) => {
+      const t = e.changedTouches && e.changedTouches[0];
+      if (!t || typeof els.sendBtn.getBoundingClientRect !== 'function') return;
+      const r = els.sendBtn.getBoundingClientRect();
+      const inside = t.clientX >= r.left - 8 && t.clientX <= r.right + 8 && t.clientY >= r.top - 8 && t.clientY <= r.bottom + 8;
+      if (!inside) return;
+      // Canceling synthetic click & focus transfer on touchend keeps the mobile keyboard open continuously
+      e.preventDefault();
+      if (typeof document !== 'undefined' && document.activeElement !== els.messageInput) {
+        try { els.messageInput.focus({ preventScroll: true }); } catch { }
+      }
+      sendMessage();
+    });
     els.sendBtn.addEventListener('click', sendMessage);
 
     els.messageInput.addEventListener('input', () => {
@@ -3377,6 +3573,7 @@
     if (els.navDrawer.classList.contains('open')) { closeDrawer(); return true; }
     if (state.infoOpen) { toggleInfoDrawer(false); return true; }
     if (els.appShell.classList.contains('mobile-chat-open')) {
+      saveCurrentChatScroll();
       els.appShell.classList.remove('mobile-chat-open');
       state.activeChatId = null;
       syncAndroidState();
@@ -3390,7 +3587,13 @@
     return false;
   };
 
-  document.addEventListener('visibilitychange', () => syncAndroidState(!document.hidden));
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) saveCurrentChatScroll();
+    syncAndroidState(!document.hidden);
+  });
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', saveCurrentChatScroll);
+  }
 
   async function boot() {
     applyPrefs();
