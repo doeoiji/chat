@@ -226,7 +226,7 @@ function scoreWordGuess(secret, guess) {
   return res;
 }
 
-function createGamesService({ storage }) {
+function createGamesService({ storage, friends = null }) {
   const TITLES = {
     tictactoe: 'Tic-Tac-Toe',
     connect4: 'Connect 4',
@@ -266,6 +266,11 @@ function createGamesService({ storage }) {
     }
 
     const { opponent } = await pickOpponent(chatId, creatorUsername, opponentUsername);
+    if (friends && !(await friends.areFriends(creatorUsername, opponent))) {
+      const err = new Error(`You can only play mini-games with friends. Add @${opponent} as a friend first!`);
+      err.statusCode = 403;
+      throw err;
+    }
     const gameId = `game_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
     const now = new Date().toISOString();
 

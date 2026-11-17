@@ -13,6 +13,7 @@ const { createRealtimeHub } = require('../src/realtime');
 const { createMailer } = require('../src/mailer');
 const { createRouter } = require('../src/router');
 const { validateEmail } = require('../src/emailValidator');
+const { extractFirstUrl, isPrivateIp, isSafePublicUrl } = require('../src/linkPreview');
 
 function invokeRouter(handleRequest, urlPath, { method = 'GET', headers = {}, body = null } = {}) {
   return new Promise((resolve, reject) => {
@@ -804,6 +805,21 @@ async function registerTestUser(handleRequest, username, email) {
   return { user: ver.body.user, cookie: ver.cookie };
 }
 
+async function makeFriends(handleRequest, sender, recipient) {
+  const reqRes = await invokeRouter(handleRequest, '/api/friends/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: sender.cookie },
+    body: JSON.stringify({ targetUsername: recipient.user.username })
+  });
+  assert.equal(reqRes.status, 200);
+  const accRes = await invokeRouter(handleRequest, '/api/friends/accept', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: recipient.cookie },
+    body: JSON.stringify({ username: sender.user.username })
+  });
+  assert.equal(accRes.status, 200);
+}
+
 test('groups & channels lifecycle, invite links, @mentions, and admin controls', async (t) => {
   const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-groups-test-'));
   const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
@@ -820,7 +836,17 @@ test('groups & channels lifecycle, invite links, @mentions, and admin controls',
   const bob = await registerTestUser(handleRequest, 'bob_g', 'bob.g@gmail.com');
   const carol = await registerTestUser(handleRequest, 'carol_g', 'carol.g@gmail.com');
 
-  // Create group
+  // Cannot directly add non-friend when creating group
+  const nonFriendGrp = await invokeRouter(handleRequest, '/api/groups', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ type: 'group', title: 'Gamers United', members: ['bob_g'] })
+  });
+  assert.equal(nonFriendGrp.status, 403);
+
+  await makeFriends(handleRequest, alice, bob);
+
+  // Create group with friend Bob
   const grpRes = await invokeRouter(handleRequest, '/api/groups', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
@@ -831,7 +857,7 @@ test('groups & channels lifecycle, invite links, @mentions, and admin controls',
   assert.equal(group.type, 'group');
   assert.deepEqual(group.participants.slice().sort(), ['alice_g', 'bob_g']);
 
-  // Carol joins by inviteCode
+  // Non-friend Carol CAN still join freely via invite link!
   const joinRes = await invokeRouter(handleRequest, '/api/groups/join', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: carol.cookie },
@@ -981,6 +1007,16 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
   });
   assert.equal(dmOpen.status, 200);
   const chatId = dmOpen.body.chat.id;
+
+  // Non-friends cannot start a mini-game
+  const blockedTtt = await invokeRouter(handleRequest, `/api/chats/${chatId}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ gameType: 'tictactoe' })
+  });
+  assert.equal(blockedTtt.status, 403);
+
+  await makeFriends(handleRequest, alice, bob);
 
   // 1. Tic-Tac-Toe win
   const tttStart = await invokeRouter(handleRequest, `/api/chats/${chatId}/games`, {
@@ -1144,3 +1180,823 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
   assert.equal(aliceChatList.status, 200);
   assert.match(aliceChatList.body.chats[0].lastMessage.preview, /Video call/);
 });
+
+test('per-user activity.log and universal.log track logins, IPs, devices, logouts, chats, and stranger reports', async (t) => {
+  const { createAuditLogger } = require('../src/audit');
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-audit-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const audit = createAuditLogger(config);
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config),
+    audit
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const headersAndroid = {
+    'Content-Type': 'application/json',
+    'x-forwarded-for': '203.0.113.45, 10.0.0.1',
+    'user-agent': 'Mozilla/5.0 (Linux; Android 10; SM-A505F; wv) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36'
+  };
+  const headersWin = {
+    'Content-Type': 'application/json',
+    'x-forwarded-for': '198.51.100.7',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36'
+  };
+
+  // Register two users
+  const regA = await invokeRouter(handleRequest, '/api/auth/register', {
+    method: 'POST',
+    headers: headersAndroid,
+    body: JSON.stringify({ username: 'audit_alice', email: 'audit.alice@gmail.com', password: 'Password123!' })
+  });
+  assert.equal(regA.status, 202);
+  const verA = await invokeRouter(handleRequest, '/api/auth/verify-email', {
+    method: 'POST',
+    headers: headersAndroid,
+    body: JSON.stringify({ verificationId: regA.body.verificationId, code: regA.body.devCode })
+  });
+  assert.equal(verA.status, 201);
+
+  const bob = await registerTestUser(handleRequest, 'audit_bob', 'audit.bob@gmail.com');
+
+  // Failed login attempt followed by successful login from Windows IP
+  const badLogin = await invokeRouter(handleRequest, '/api/auth/login', {
+    method: 'POST',
+    headers: headersWin,
+    body: JSON.stringify({ identifier: 'audit_alice', password: 'wrong-password' })
+  });
+  assert.equal(badLogin.status, 401);
+
+  const okLogin = await invokeRouter(handleRequest, '/api/auth/login', {
+    method: 'POST',
+    headers: headersWin,
+    body: JSON.stringify({ identifier: 'audit_alice', password: 'Password123!' })
+  });
+  assert.equal(okLogin.status, 200);
+
+  // Send a DM message
+  const msgRes = await invokeRouter(handleRequest, '/api/chats/dm_audit_alice__audit_bob/messages', {
+    method: 'POST',
+    headers: { ...headersAndroid, Cookie: verA.cookie },
+    body: JSON.stringify({ text: 'Audited hello!' })
+  });
+  assert.equal(msgRes.status, 201);
+
+  // Anonymous Stranger Lounge match + message + report (must log real usernames in server logs)
+  await invokeRouter(handleRequest, '/api/stranger/meet', {
+    method: 'POST',
+    headers: { ...headersAndroid, Cookie: verA.cookie },
+    body: JSON.stringify({ interests: ['gaming'], language: 'en' })
+  });
+  await invokeRouter(handleRequest, '/api/stranger/meet', {
+    method: 'POST',
+    headers: { ...headersWin, Cookie: bob.cookie },
+    body: JSON.stringify({ interests: ['gaming'], language: 'en' })
+  });
+  await invokeRouter(handleRequest, '/api/stranger/message', {
+    method: 'POST',
+    headers: { ...headersWin, Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Anonymous test line' })
+  });
+  await invokeRouter(handleRequest, '/api/stranger/report', {
+    method: 'POST',
+    headers: { ...headersAndroid, Cookie: verA.cookie },
+    body: JSON.stringify({ reason: 'harassment' })
+  });
+
+  // Search users (logged in activity.log & global universal.log, omitted from concise per-user universal.log)
+  await invokeRouter(handleRequest, '/api/users/search?q=audit_bob', {
+    headers: { ...headersAndroid, Cookie: verA.cookie }
+  });
+
+  // Logout
+  const outRes = await invokeRouter(handleRequest, '/api/auth/logout', {
+    method: 'POST',
+    headers: { ...headersAndroid, Cookie: verA.cookie }
+  });
+  assert.equal(outRes.status, 200);
+
+  await audit.flush();
+
+  const aliceLogPath = path.join(config.usersDir, 'audit_alice', 'activity.log');
+  const aliceUserUniversalPath = path.join(config.usersDir, 'audit_alice', 'universal.log');
+  const bobLogPath = path.join(config.usersDir, 'audit_bob', 'activity.log');
+  const bobUserUniversalPath = path.join(config.usersDir, 'audit_bob', 'universal.log');
+  const universalLogPath = config.universalLogPath;
+
+  assert.equal(fs.existsSync(aliceLogPath), true);
+  assert.equal(fs.existsSync(aliceUserUniversalPath), true);
+  assert.equal(fs.existsSync(bobLogPath), true);
+  assert.equal(fs.existsSync(bobUserUniversalPath), true);
+  assert.equal(fs.existsSync(universalLogPath), true);
+
+  const aliceLog = fs.readFileSync(aliceLogPath, 'utf8');
+  const aliceUserUniversal = fs.readFileSync(aliceUserUniversalPath, 'utf8');
+  const bobLog = fs.readFileSync(bobLogPath, 'utf8');
+  const bobUserUniversal = fs.readFileSync(bobUserUniversalPath, 'utf8');
+  const universalLog = fs.readFileSync(universalLogPath, 'utf8');
+
+  assert.match(aliceLog, /ACTION=EMAIL_VERIFIED_REGISTER/);
+  assert.match(aliceLog, /ACTION=LOGIN_FAILED.*ip=198\.51\.100\.7.*device="Chrome/);
+  assert.match(aliceLog, /ACTION=LOGIN_SUCCESS.*ip=198\.51\.100\.7/);
+  assert.match(aliceLog, /ACTION=USER_SEARCH/);
+  assert.match(aliceLog, /ACTION=MESSAGE_SENT.*ip=203\.0\.113\.45.*device="Android App \(WebView\) \(Android 10; SM-A505F\)"/);
+  assert.match(aliceLog, /ACTION=LOGOUT.*user=@audit_alice.*ip=203\.0\.113\.45/);
+
+  // Per-user universal.log keeps necessary events cleanly (logins, logouts, messages, reports) and excludes search/queue noise
+  assert.match(aliceUserUniversal, /LOGIN_FAILED ip=198\.51\.100\.7/);
+  assert.match(aliceUserUniversal, /LOGIN_SUCCESS ip=198\.51\.100\.7/);
+  assert.match(aliceUserUniversal, /MESSAGE_SENT .*Audited hello!/);
+  assert.match(aliceUserUniversal, /STRANGER_REPORTED .*reason="harassment"/);
+  assert.match(aliceUserUniversal, /LOGOUT .*ip=203\.0\.113\.45/);
+  assert.equal(aliceUserUniversal.includes('USER_SEARCH'), false);
+  assert.equal(aliceUserUniversal.includes('STRANGER_QUEUE_JOIN'), false);
+
+  assert.match(bobLog, /ACTION=STRANGER_MESSAGE.*user=@audit_bob.*Anonymous test line/);
+  assert.match(bobUserUniversal, /STRANGER_REPORTED .*reportedUser="audit_bob"/);
+
+  // Global universal log includes events from BOTH users + pre-verification registration requests
+  assert.match(universalLog, /ACTION=REGISTER_REQUEST user=@audit_alice ip=203\.0\.113\.45/);
+  assert.match(universalLog, /ACTION=LOGIN_SUCCESS user=@audit_alice/);
+  assert.match(universalLog, /ACTION=STRANGER_REPORTED/);
+  assert.match(universalLog, /ACTION=LOGOUT user=@audit_alice/);
+});
+
+test('exact-only search privacy and full friend request lifecycle (send, cancel, accept, unfriend)', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-friends-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_f', 'alice.f@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_f', 'bob.f@gmail.com');
+
+  // Empty & partial searches MUST return zero users (hidden directory)
+  const emptySearch = await invokeRouter(handleRequest, '/api/users/search?q=', { headers: { Cookie: alice.cookie } });
+  assert.equal(emptySearch.status, 200);
+  assert.equal(emptySearch.body.users.length, 0);
+
+  const partialSearch = await invokeRouter(handleRequest, '/api/users/search?q=bob', { headers: { Cookie: alice.cookie } });
+  assert.equal(partialSearch.status, 200);
+  assert.equal(partialSearch.body.users.length, 0);
+
+  const emailPartial = await invokeRouter(handleRequest, '/api/users/search?q=gmail.com', { headers: { Cookie: alice.cookie } });
+  assert.equal(emailPartial.status, 200);
+  assert.equal(emailPartial.body.users.length, 0);
+
+  // Exact @username and exact email return the user
+  const exactHandle = await invokeRouter(handleRequest, '/api/users/search?q=@bob_f', { headers: { Cookie: alice.cookie } });
+  assert.equal(exactHandle.status, 200);
+  assert.equal(exactHandle.body.users.length, 1);
+  assert.equal(exactHandle.body.users[0].username, 'bob_f');
+  assert.equal(exactHandle.body.users[0].relationship, 'none');
+
+  const exactEmail = await invokeRouter(handleRequest, '/api/users/search?q=bob.f@gmail.com', { headers: { Cookie: alice.cookie } });
+  assert.equal(exactEmail.status, 200);
+  assert.equal(exactEmail.body.users.length, 1);
+
+  // Send friend request -> shows in Alice's sent & Bob's received -> cancel removes both
+  const req1 = await invokeRouter(handleRequest, '/api/friends/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_f' })
+  });
+  assert.equal(req1.status, 200);
+  assert.equal(req1.body.status, 'outgoing_pending');
+
+  const aliceList1 = await invokeRouter(handleRequest, '/api/friends', { headers: { Cookie: alice.cookie } });
+  assert.equal(aliceList1.body.sent.length, 1);
+  assert.equal(aliceList1.body.sent[0].user.username, 'bob_f');
+
+  const cancelRes = await invokeRouter(handleRequest, '/api/friends/cancel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ username: 'bob_f' })
+  });
+  assert.equal(cancelRes.status, 200);
+
+  const aliceList2 = await invokeRouter(handleRequest, '/api/friends', { headers: { Cookie: alice.cookie } });
+  assert.equal(aliceList2.body.sent.length, 0);
+
+  // Re-send and Bob accepts -> mutual friends -> Unfriend removes both
+  await makeFriends(handleRequest, alice, bob);
+
+  const bobList = await invokeRouter(handleRequest, '/api/friends', { headers: { Cookie: bob.cookie } });
+  assert.equal(bobList.body.friends.length, 1);
+  assert.equal(bobList.body.friends[0].username, 'alice_f');
+
+  const unfriendRes = await invokeRouter(handleRequest, '/api/friends/bob_f', {
+    method: 'DELETE',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(unfriendRes.status, 200);
+
+  const bobListAfter = await invokeRouter(handleRequest, '/api/friends', { headers: { Cookie: bob.cookie } });
+  assert.equal(bobListAfter.body.friends.length, 0);
+});
+
+test('everyday Telegram conveniences: edit messages, Saved Messages, pin messages/chats, mute chats, forward & bulk delete, and link preview SSRF guards', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-conv-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_c', 'alice.c@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_c', 'bob.c@gmail.com');
+  const carol = await registerTestUser(handleRequest, 'carol_c', 'carol.c@gmail.com');
+
+  // Open DM chats with Bob and Carol
+  const dmBobOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_c' })
+  });
+  assert.equal(dmBobOpen.status, 200);
+  const chatBobId = dmBobOpen.body.chat.id;
+
+  const dmCarolOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'carol_c' })
+  });
+  assert.equal(dmCarolOpen.status, 200);
+  const chatCarolId = dmCarolOpen.body.chat.id;
+
+  // 1. Send & Edit Sent Messages
+  const send1 = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Original typo mesage' })
+  });
+  assert.equal(send1.status, 201);
+  const msg1Id = send1.body.message.id;
+
+  // Bob cannot edit Alice's message
+  const bobEditDenied = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/messages/${msg1Id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Hacked text' })
+  });
+  assert.equal(bobEditDenied.status, 403);
+
+  const aliceEditOk = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/messages/${msg1Id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Fixed **bold** and ||secret||' })
+  });
+  assert.equal(aliceEditOk.status, 200);
+  assert.equal(aliceEditOk.body.message.text, 'Fixed **bold** and ||secret||');
+  assert.ok(aliceEditOk.body.message.editedAt);
+
+  // 2. Saved Messages personal cloud chat + isolation check
+  const savedOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ type: 'saved' })
+  });
+  assert.equal(savedOpen.status, 200);
+  assert.equal(savedOpen.body.chat.id, 'saved_alice_c');
+  assert.equal(savedOpen.body.chat.type, 'saved');
+
+  // Bob cannot open Alice's Saved Messages
+  const bobSavedDenied = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ chatId: 'saved_alice_c' })
+  });
+  assert.equal(bobSavedDenied.status, 403);
+
+  const savedSend = await invokeRouter(handleRequest, '/api/chats/saved_alice_c/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Remember milk & SSH key note' })
+  });
+  assert.equal(savedSend.status, 201);
+
+  // 3. Pin & Unpin Message
+  const pinRes = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ messageId: msg1Id })
+  });
+  assert.equal(pinRes.status, 200);
+  assert.equal(pinRes.body.pinnedMessage.id, msg1Id);
+
+  const reopenedBob = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_c' })
+  });
+  assert.equal(reopenedBob.body.chat.pinnedMessage.id, msg1Id);
+
+  const unpinRes = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ unpin: true })
+  });
+  assert.equal(unpinRes.status, 200);
+  assert.equal(unpinRes.body.pinnedMessage, null);
+
+  // 4. Pin Chat & Mute Chat (pinned chat sorts first in GET /api/chats)
+  await invokeRouter(handleRequest, `/api/chats/${chatCarolId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Newer message to Carol' })
+  });
+
+  const prefPinMute = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ pinned: true, muted: true })
+  });
+  assert.equal(prefPinMute.status, 200);
+  assert.equal(prefPinMute.body.isPinned, true);
+  assert.equal(prefPinMute.body.isMuted, true);
+
+  const chatList = await invokeRouter(handleRequest, '/api/chats', {
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(chatList.status, 200);
+  assert.equal(chatList.body.chats[0].id, 'saved_alice_c');
+  const bobIdx = chatList.body.chats.findIndex((c) => c.id === chatBobId);
+  const carolIdx = chatList.body.chats.findIndex((c) => c.id === chatCarolId);
+  assert.ok(bobIdx >= 0 && carolIdx > bobIdx);
+  assert.equal(chatList.body.chats[bobIdx].isPinned, true);
+  assert.equal(chatList.body.chats[bobIdx].isMuted, true);
+
+  // 5. Forward messages & Bulk Delete own messages
+  const send2 = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Forwardable note #2' })
+  });
+  const msg2Id = send2.body.message.id;
+
+  const fwdRes = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/forward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetChatIds: ['saved', chatCarolId], messageIds: [msg1Id, msg2Id] })
+  });
+  assert.equal(fwdRes.status, 200);
+  assert.equal(fwdRes.body.count, 4);
+
+  const carolView = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: carol.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_c' })
+  });
+  const forwardedToCarol = carolView.body.messages.filter((m) => m.forwardedFrom && m.forwardedFrom.sender === 'alice_c');
+  assert.equal(forwardedToCarol.length, 2);
+
+  // Bulk delete both messages from chatBobId
+  const bulkDelRes = await invokeRouter(handleRequest, `/api/chats/${chatBobId}/messages/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ messageIds: [msg1Id, msg2Id] })
+  });
+  assert.equal(bulkDelRes.status, 200);
+  assert.equal(bulkDelRes.body.deletedIds.length, 2);
+
+  const bobAfterBulkDel = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_c' })
+  });
+  assert.equal(bobAfterBulkDel.body.messages.length, 0);
+
+  // 6. Link Preview SSRF & URL extractor guards
+  assert.equal(extractFirstUrl('Check https://example.com/docs?a=1). right now'), 'https://example.com/docs?a=1');
+  assert.equal(isPrivateIp('127.0.0.1'), true);
+  assert.equal(isPrivateIp('192.168.1.50'), true);
+  assert.equal(isPrivateIp('10.0.0.1'), true);
+  assert.equal(isPrivateIp('169.254.169.254'), true);
+  assert.equal(isPrivateIp('8.8.8.8'), false);
+  assert.equal(await isSafePublicUrl('http://localhost:3000/secret'), false);
+  assert.equal(await isSafePublicUrl('http://127.0.0.1:8080/admin'), false);
+  assert.equal(await isSafePublicUrl('ftp://example.com/file'), false);
+});
+
+test('delete messages/chats for self vs everyone and bulk mute/pin chat prefs', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-del-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_d', 'alice.d@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_d', 'bob.d@gmail.com');
+  const carol = await registerTestUser(handleRequest, 'carol_d', 'carol.d@gmail.com');
+
+  const dmBob = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_d' })
+  })).body.chat.id;
+
+  const dmCarol = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'carol_d' })
+  })).body.chat.id;
+
+  // Send messages in DM with Bob
+  const aMsg = (await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Alice hello 1' })
+  })).body.message.id;
+
+  const bMsg = (await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Bob reply 2' })
+  })).body.message.id;
+
+  // Alice deletes her own message AND Bob's message ONLY for herself (forEveryone: false)
+  const delForMeRes = await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ messageIds: [aMsg, bMsg], forEveryone: false })
+  });
+  assert.equal(delForMeRes.status, 200);
+  assert.equal(delForMeRes.body.deletedForMeIds.length, 2);
+  assert.equal(delForMeRes.body.forEveryoneIds.length, 0);
+
+  // Alice sees 0 messages, Bob STILL sees both messages
+  const aliceBobOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_d' })
+  });
+  assert.equal(aliceBobOpen.body.messages.length, 0);
+  assert.equal(aliceBobOpen.body.chat.lastMessage, null);
+
+  const bobAliceOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_d' })
+  });
+  assert.equal(bobAliceOpen.body.messages.length, 2);
+
+  // Alice sends another message and deletes it WITH forEveryone: true
+  const aMsg2 = (await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Alice unsend me' })
+  })).body.message.id;
+
+  const delForAllRes = await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages/${aMsg2}?forEveryone=1`, {
+    method: 'DELETE',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(delForAllRes.status, 200);
+  assert.equal(delForAllRes.body.forEveryone, true);
+
+  const bobAfterUnsend = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_d' })
+  });
+  assert.equal(bobAfterUnsend.body.messages.some((m) => m.id === aMsg2), false);
+
+  // Bulk mute/pin multiple chats at once
+  await invokeRouter(handleRequest, `/api/chats/${dmCarol}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Hey Carol' })
+  });
+  const bulkPrefsRes = await invokeRouter(handleRequest, '/api/chats/bulk-prefs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ chatIds: [dmBob, dmCarol], muted: true, pinned: true })
+  });
+  assert.equal(bulkPrefsRes.status, 200);
+  const aliceChats = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(aliceChats.length, 2);
+  assert.ok(aliceChats.every((c) => c.isMuted && c.isPinned));
+
+  // Delete chat with Bob ONLY for Alice (forEveryone: false) -> disappears for Alice, stays for Bob!
+  const delChatSelf = await invokeRouter(handleRequest, `/api/chats/${dmBob}?forEveryone=0`, {
+    method: 'DELETE',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(delChatSelf.status, 200);
+  assert.equal(delChatSelf.body.forEveryone, false);
+
+  const aliceAfterDelBobChat = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(aliceAfterDelBobChat.some((c) => c.id === dmBob), false);
+
+  const bobChatsStillHasDm = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: bob.cookie } })).body.chats;
+  assert.equal(bobChatsStillHasDm.some((c) => c.id === dmBob), true);
+  assert.equal(bobChatsStillHasDm.find((c) => c.id === dmBob).lastMessage.preview, 'Bob reply 2');
+
+  // If Bob sends a fresh message after Alice deleted for herself, chat revives with ONLY the new message for Alice
+  await new Promise((r) => setTimeout(r, 15));
+  await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Fresh message after clear' })
+  });
+  const aliceReopenedBob = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_d' })
+  });
+  assert.equal(aliceReopenedBob.body.messages.length, 1);
+  assert.equal(aliceReopenedBob.body.messages[0].text, 'Fresh message after clear');
+
+  // Bulk delete chat with Carol FOR EVERYONE (forEveryone: true) -> deleted for both Alice & Carol!
+  const bulkDelChatAll = await invokeRouter(handleRequest, '/api/chats/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ chatIds: [dmCarol], forEveryone: true })
+  });
+  assert.equal(bulkDelChatAll.status, 200);
+  assert.equal(bulkDelChatAll.body.forEveryone, true);
+
+  const carolAfterDelAll = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: carol.cookie } })).body.chats;
+  assert.equal(carolAfterDelAll.some((c) => c.id === dmCarol), false);
+});
+
+test('privacy, safety & account essentials: forgot/change password, account deletion keeping logs/data, block/report, privacy settings, and QR code', async (t) => {
+  const { createAuditLogger } = require('../src/audit');
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-sec-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null, allowDevEmailCode: true });
+  const audit = createAuditLogger(config);
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config),
+    audit
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_s', 'alice.s@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_s', 'bob.s@gmail.com');
+  const carol = await registerTestUser(handleRequest, 'carol_s', 'carol.s@gmail.com');
+
+  // 1. Forgot Password -> Reset via Email OTP
+  const forgotReq = await invokeRouter(handleRequest, '/api/auth/forgot-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: 'alice.s@gmail.com' })
+  });
+  assert.equal(forgotReq.status, 200);
+  assert.ok(forgotReq.body.verificationId);
+  assert.match(forgotReq.body.devCode, /^\d{6}$/);
+
+  const resetRes = await invokeRouter(handleRequest, '/api/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      verificationId: forgotReq.body.verificationId,
+      code: forgotReq.body.devCode,
+      newPassword: 'new_reset_password_99'
+    })
+  });
+  assert.equal(resetRes.status, 200);
+
+  // Old password fails, reset password succeeds
+  const oldLoginFail = await invokeRouter(handleRequest, '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: 'alice_s', password: 'password123' })
+  });
+  assert.equal(oldLoginFail.status, 401);
+
+  const newLoginOk = await invokeRouter(handleRequest, '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: 'alice_s', password: 'new_reset_password_99' })
+  });
+  assert.equal(newLoginOk.status, 200);
+  alice.cookie = newLoginOk.cookie;
+
+  // 2. Change Password (authenticated)
+  const wrongCurPass = await invokeRouter(handleRequest, '/api/users/me/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ currentPassword: 'wrong_password', newPassword: 'changed_pw_123' })
+  });
+  assert.equal(wrongCurPass.status, 403);
+
+  const goodChangePass = await invokeRouter(handleRequest, '/api/users/me/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ currentPassword: 'new_reset_password_99', newPassword: 'changed_pw_123' })
+  });
+  assert.equal(goodChangePass.status, 200);
+
+  // 3. Privacy Settings (Everyone / Contacts / Nobody) + Shareable profile lookup
+  await makeFriends(handleRequest, alice, bob);
+  await invokeRouter(handleRequest, '/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ birthday: '1999-05-15' })
+  });
+
+  // Upload tiny PNG avatar for Alice
+  const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82]);
+  const avBoundary = '----VRPrivacyAvatarBoundary';
+  const avBody = Buffer.concat([
+    Buffer.from(`--${avBoundary}\r\nContent-Disposition: form-data; name="avatar"; filename="av.png"\r\nContent-Type: image/png\r\n\r\n`),
+    pngBytes,
+    Buffer.from(`\r\n--${avBoundary}--\r\n`)
+  ]);
+  const upAv = await invokeRouter(handleRequest, '/api/users/me/avatar', {
+    method: 'POST',
+    headers: { Cookie: alice.cookie, 'Content-Type': `multipart/form-data; boundary=${avBoundary}` },
+    body: avBody
+  });
+  assert.equal(upAv.status, 200);
+  const avatarUrl = upAv.body.user.avatarUrl;
+
+  const privRes = await invokeRouter(handleRequest, '/api/users/me/privacy', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ email: 'nobody', birthday: 'contacts', lastSeen: 'nobody', avatar: 'contacts' })
+  });
+  assert.equal(privRes.status, 200);
+  assert.equal(privRes.body.user.privacy.email, 'nobody');
+
+  // Non-friend Carol cannot see email, birthday, lastSeen, or avatar
+  const carolSeesAlice = await invokeRouter(handleRequest, '/api/users/profile/alice_s', {
+    headers: { Cookie: carol.cookie }
+  });
+  assert.equal(carolSeesAlice.status, 200);
+  assert.equal(carolSeesAlice.body.user.email, null);
+  assert.equal(carolSeesAlice.body.user.birthday, null);
+  assert.equal(carolSeesAlice.body.user.avatarUrl, null);
+  assert.equal(carolSeesAlice.body.user.lastSeen, null);
+
+  const carolAvFetch = await invokeRouter(handleRequest, avatarUrl, { headers: { Cookie: carol.cookie } });
+  assert.equal(carolAvFetch.status, 403);
+
+  // Friend Bob sees birthday & avatar, while nobody-fields (email, lastSeen) remain hidden
+  const bobSeesAlice = await invokeRouter(handleRequest, '/api/users/profile/alice_s', {
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(bobSeesAlice.status, 200);
+  assert.equal(bobSeesAlice.body.user.email, null);
+  assert.equal(bobSeesAlice.body.user.birthday, '1999-05-15');
+  assert.equal(bobSeesAlice.body.user.avatarUrl, avatarUrl);
+  assert.equal(bobSeesAlice.body.user.lastSeen, null);
+
+  const bobAvFetch = await invokeRouter(handleRequest, avatarUrl, { headers: { Cookie: bob.cookie } });
+  assert.equal(bobAvFetch.status, 200);
+
+  // 4. Block User & Report Controls
+  const dmBobOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_s' })
+  });
+  const dmBobId = dmBobOpen.body.chat.id;
+
+  const blkRes = await invokeRouter(handleRequest, '/api/users/block', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_s' })
+  });
+  assert.equal(blkRes.status, 200);
+
+  // Bob cannot message or call Alice while blocked
+  const bobMsgBlocked = await invokeRouter(handleRequest, `/api/chats/${dmBobId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Can you see this?' })
+  });
+  assert.equal(bobMsgBlocked.status, 403);
+
+  const bobCallBlocked = await invokeRouter(handleRequest, '/api/calls/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_s', mode: 'audio' })
+  });
+  assert.equal(bobCallBlocked.status, 403);
+
+  const blockedList = await invokeRouter(handleRequest, '/api/users/blocked', { headers: { Cookie: alice.cookie } });
+  assert.equal(blockedList.body.blocked.length, 1);
+  assert.equal(blockedList.body.blocked[0].username, 'bob_s');
+
+  // Report user
+  const reportRes = await invokeRouter(handleRequest, '/api/users/report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: carol.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_s', reason: 'spam', details: 'Unwanted spam links' })
+  });
+  assert.equal(reportRes.status, 201);
+  assert.equal(fs.existsSync(path.join(tempDataDir, 'reports.jsonl')), true);
+
+  // Unblock restores messaging
+  await invokeRouter(handleRequest, '/api/users/block/bob_s', {
+    method: 'DELETE',
+    headers: { Cookie: alice.cookie }
+  });
+  const bobMsgAfterUnblock = await invokeRouter(handleRequest, `/api/chats/${dmBobId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ text: 'Thanks for unblocking!' })
+  });
+  assert.equal(bobMsgAfterUnblock.status, 201);
+
+  // 5. Account Deletion: OTP + "DELETE" confirmation, preserves logs & data, flags deleted, frees username & email!
+  const delReq = await invokeRouter(handleRequest, '/api/users/me/delete-request', {
+    method: 'POST',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(delReq.status, 200);
+  assert.match(delReq.body.devCode, /^\d{6}$/);
+
+  const wrongConfirmPhrase = await invokeRouter(handleRequest, '/api/users/me/delete-confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({
+      verificationId: delReq.body.verificationId,
+      code: delReq.body.devCode,
+      confirmText: 'delete'
+    })
+  });
+  assert.equal(wrongConfirmPhrase.status, 400);
+
+  const delConfirmOk = await invokeRouter(handleRequest, '/api/users/me/delete-confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({
+      verificationId: delReq.body.verificationId,
+      code: delReq.body.devCode,
+      confirmText: 'DELETE'
+    })
+  });
+  assert.equal(delConfirmOk.status, 200);
+  assert.equal(delConfirmOk.body.deleted, true);
+
+  await audit.flush();
+
+  // Profile has deleted: true flag, while activity.log, universal.log, and global universal.log remain intact!
+  const aliceFolder = path.join(config.usersDir, 'alice_s');
+  const deletedProfile = JSON.parse(fs.readFileSync(path.join(aliceFolder, 'profile.json'), 'utf8'));
+  assert.equal(deletedProfile.deleted, true);
+  assert.ok(deletedProfile.deletedAt);
+  assert.equal(fs.existsSync(path.join(aliceFolder, 'activity.log')), true);
+  const aliceUnivLog = fs.readFileSync(path.join(aliceFolder, 'universal.log'), 'utf8');
+  assert.ok(aliceUnivLog.includes('ACCOUNT_DELETED'));
+  assert.equal(fs.existsSync(path.join(tempDataDir, 'universal.log')), true);
+
+  // Deleted account cannot log in or use old cookie
+  const deletedLoginFail = await invokeRouter(handleRequest, '/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier: 'alice_s', password: 'changed_pw_123' })
+  });
+  assert.equal(deletedLoginFail.status, 401);
+
+  const deletedSessionFail = await invokeRouter(handleRequest, '/api/auth/me', {
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(deletedSessionFail.status, 401);
+
+  // Username AND Email are immediately available to re-register, and old deleted profile & logs are preserved!
+  const reRegisteredAlice = await registerTestUser(handleRequest, 'alice_s', 'alice.s@gmail.com');
+  assert.equal(reRegisteredAlice.user.username, 'alice_s');
+  const archivedDeletedFiles = fs.readdirSync(aliceFolder).filter((f) => f.startsWith('deleted_profile_'));
+  assert.equal(archivedDeletedFiles.length, 1);
+  assert.ok(fs.readFileSync(path.join(aliceFolder, 'universal.log'), 'utf8').includes('ACCOUNT_DELETED'));
+
+  // 6. Zero-dependency QR Code Encoder (public/qrcode.js)
+  const qr = require('../public/qrcode');
+  const qrUrl = 'https://chat.bitdev.fun/?user=alice_s';
+  const matrixRes = qr.encodeMatrix(qrUrl);
+  assert.ok(matrixRes.size >= 25);
+  assert.equal(matrixRes.modules[0][0], 1);
+  assert.equal(matrixRes.modules[3][3], 1);
+  assert.equal(matrixRes.modules[1][1], 0);
+  const svg = qr.renderSvg(qrUrl);
+  assert.ok(svg.startsWith('<svg ') && svg.includes('<path d="M'));
+});
+
+
+

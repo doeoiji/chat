@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-function createCallsService({ hub, storage }) {
+function createCallsService({ hub, storage, audit = null }) {
   // callId -> { id, caller, callee, mode: 'audio'|'video', chatId, status: 'ringing'|'active'|'ended', createdAt, timeoutId }
   const calls = new Map();
   // username -> callId
@@ -126,6 +126,20 @@ function createCallsService({ hub, storage }) {
           meta,
           senderProfile: callerRaw ? storage.toPublicUser(callerRaw) : null
         });
+        if (audit) {
+          audit.log({
+            action: `CALL_${String(outcome || 'ended').toUpperCase()}`,
+            username: targetCall.caller,
+            alsoUsers: [targetCall.callee],
+            details: {
+              callId: targetCall.id,
+              chatId: targetCall.chatId,
+              mode: targetCall.mode,
+              durationSec,
+              callee: targetCall.callee
+            }
+          });
+        }
       } catch {
         // Ignore history write failure on cleanup
       }

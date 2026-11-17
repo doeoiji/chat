@@ -14,15 +14,29 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
-function buildVerificationEmail({ to, username, code, expiresMinutes }) {
-  const subject = `VibeRoom Verification Code: ${code}`;
+function buildVerificationEmail({ to, username, code, expiresMinutes, purpose = 'signup' }) {
+  const isReset = purpose === 'password_reset';
+  const isDelete = purpose === 'delete_account';
+  const subject = isReset
+    ? `VibeRoom Password Reset Code: ${code}`
+    : (isDelete ? `VibeRoom Account Deletion Code: ${code}` : `VibeRoom Verification Code: ${code}`);
+  const headline = isReset
+    ? 'Reset your password'
+    : (isDelete ? 'Confirm account deletion' : 'Verify your email address');
+  const intro = isReset
+    ? 'enter the 6-digit code below to reset your VibeRoom password:'
+    : (isDelete ? 'enter the 6-digit code below to confirm deleting your VibeRoom account:' : 'enter the 6-digit code below to finish creating your VibeRoom account:');
+  const footer = isReset || isDelete
+    ? `This code expires in ${expiresMinutes} minutes. If you didn't request this, secure your account immediately.`
+    : `This code expires in ${expiresMinutes} minutes. If you didn't request this, ignore this email.`;
+
   const text = [
     `Hello @${username},`,
     '',
-    `Your VibeRoom account verification code is: ${code}`,
+    `Your VibeRoom code is: ${code}`,
     '',
     `This code expires in ${expiresMinutes} minutes.`,
-    'If you did not request this signup, you can safely ignore this email.',
+    'If you did not request this, you can safely ignore this email.',
     '',
     '— VibeRoom'
   ].join('\r\n');
@@ -32,15 +46,15 @@ function buildVerificationEmail({ to, username, code, expiresMinutes }) {
 <body style="margin:0;padding:24px;background:#0E1621;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#F5F5F5;">
   <div style="max-width:460px;margin:0 auto;background:#17212B;border-radius:16px;padding:28px;border:1px solid rgba(255,255,255,0.08);">
     <div style="font-size:20px;font-weight:700;color:#37AEE2;margin-bottom:8px;">VibeRoom</div>
-    <h2 style="margin:0 0 12px;font-size:18px;color:#FFFFFF;">Verify your email address</h2>
+    <h2 style="margin:0 0 12px;font-size:18px;color:#FFFFFF;">${headline}</h2>
     <p style="margin:0 0 18px;font-size:14px;line-height:1.5;color:#B8C7D4;">
-      Hi <strong>@${escapeHtml(username)}</strong>, enter the 6-digit code below to finish creating your VibeRoom account:
+      Hi <strong>@${escapeHtml(username)}</strong>, ${intro}
     </p>
     <div style="background:#242F3D;border-radius:12px;padding:16px;text-align:center;font-size:32px;font-weight:800;letter-spacing:8px;color:#FFFFFF;margin-bottom:18px;">
       ${escapeHtml(code)}
     </div>
     <p style="margin:0;font-size:12.5px;color:#8A9BA8;line-height:1.45;">
-      This code expires in ${expiresMinutes} minutes. If you didn't request this, ignore this email.
+      ${footer}
     </p>
   </div>
 </body>
@@ -233,8 +247,8 @@ async function sendViaSmtp(smtp, mail) {
 }
 
 function createMailer(config) {
-  async function sendVerificationCode({ to, username, code, expiresMinutes }) {
-    const mail = buildVerificationEmail({ to, username, code, expiresMinutes });
+  async function sendVerificationCode({ to, username, code, expiresMinutes, purpose = 'signup' }) {
+    const mail = buildVerificationEmail({ to, username, code, expiresMinutes, purpose });
 
     if (config.smtp) {
       await sendViaSmtp(config.smtp, mail);

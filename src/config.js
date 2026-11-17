@@ -52,6 +52,7 @@ function createConfig(overrides = {}) {
     chatsDir: path.join(dataDir, 'chats'),
     pendingDir: path.join(dataDir, 'pending'),
     outboxDir: path.join(dataDir, 'outbox'),
+    universalLogPath: overrides.universalLogPath || process.env.UNIVERSAL_LOG_PATH || path.join(dataDir, 'universal.log'),
     port: Number(overrides.port ?? process.env.PORT ?? 3000),
     host: overrides.host ?? process.env.HOST ?? '127.0.0.1',
     maxUploadBytes: maxUploadMb * 1024 * 1024,

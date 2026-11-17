@@ -58,9 +58,48 @@
           </div>
         </div>
         <div id="login-error" class="form-error hidden" role="alert"></div>
+        <div class="auth-forgot-row">
+          <button id="forgot-password-btn" class="link-btn" type="button">Forgot password?</button>
+        </div>
         <button id="login-submit" class="primary-btn" type="submit">
           <span>Sign In</span>
         </button>
+      </form>
+
+      <!-- Forgot Password Flow -->
+      <form id="forgot-form" class="auth-form hidden" autocomplete="off">
+        <div class="verify-header">
+          <div class="verify-icon">🔑</div>
+          <h2>Reset password</h2>
+          <p id="forgot-subtitle" class="verify-subtitle">Enter your username or email to get a 6-digit verification code.</p>
+        </div>
+        <div id="forgot-step-request">
+          <div class="field-group">
+            <label for="forgot-identifier">Username or Email</label>
+            <input id="forgot-identifier" type="text" placeholder="e.g. alex or alex@gmail.com" autocomplete="username" />
+          </div>
+          <div id="forgot-req-error" class="form-error hidden" role="alert"></div>
+          <button id="forgot-send-btn" class="primary-btn" type="button">Send Reset Code</button>
+        </div>
+        <div id="forgot-step-reset" class="hidden">
+          <div id="forgot-dev-banner" class="verify-dev-banner hidden"></div>
+          <div class="field-group">
+            <label for="forgot-code">6-Digit Code</label>
+            <input id="forgot-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" />
+          </div>
+          <div class="field-group">
+            <label for="forgot-new-password">New Password</label>
+            <div class="password-wrap">
+              <input id="forgot-new-password" type="password" placeholder="At least 6 characters" minlength="6" maxlength="128" autocomplete="new-password" />
+              <button type="button" class="toggle-pass-btn" data-target="forgot-new-password" aria-label="Show password">👁</button>
+            </div>
+          </div>
+          <div id="forgot-reset-error" class="form-error hidden" role="alert"></div>
+          <button id="forgot-reset-submit" class="primary-btn" type="submit">Reset Password</button>
+        </div>
+        <div class="verify-actions">
+          <button id="forgot-back-btn" class="link-btn" type="button">Back to Sign In</button>
+        </div>
       </form>
 
       <!-- Register Form -->
@@ -164,6 +203,27 @@
         </div>
       </div>
       <nav class="drawer-menu">
+        <button id="menu-saved-messages" class="drawer-item" type="button">
+          <span class="drawer-item-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+          </span>
+          <span>Saved Messages</span>
+        </button>
+        <button id="menu-friends" class="drawer-item" type="button">
+          <span class="drawer-item-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </span>
+          <span>Friends &amp; Requests</span>
+        </button>
         <button id="menu-find-users" class="drawer-item" type="button">
           <span class="drawer-item-icon">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
@@ -174,7 +234,7 @@
               <line x1="23" y1="11" x2="17" y2="11" />
             </svg>
           </span>
-          <span>Find People</span>
+          <span>Find by Username / Email</span>
         </button>
         <button id="menu-stranger" class="drawer-item" type="button">
           <span class="drawer-item-icon">
@@ -289,11 +349,11 @@
             <circle cx="11" cy="11" r="7" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <input id="sidebar-search" type="search" placeholder="Search username or email..." autocomplete="off" />
+          <input id="sidebar-search" type="search" placeholder="Exact @username or email..." autocomplete="off" />
           <button id="clear-search-btn" class="clear-search-btn hidden" type="button"
             aria-label="Clear search">✕</button>
         </div>
-        <button id="browse-users-btn" class="icon-btn" type="button" title="Browse all users" aria-label="Find users">
+        <button id="browse-users-btn" class="icon-btn" type="button" title="Find user by exact username or email" aria-label="Find user">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round">
             <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -349,6 +409,20 @@
           <span>Unread</span>
           <span id="unread-tab-badge" class="sidebar-tab-badge hidden">0</span>
         </button>
+        <button id="tab-filter-friends" class="sidebar-tab" type="button" data-chat-filter="friends">
+          <span>Friends</span>
+          <span id="friends-tab-badge" class="sidebar-tab-badge hidden">0</span>
+        </button>
+      </div>
+
+      <div id="chat-select-bar" class="chat-select-bar hidden">
+        <span id="chat-select-count" class="chat-select-count">0 selected</span>
+        <div class="chat-select-actions">
+          <button id="chat-sel-pin-btn" class="secondary-btn sm" type="button" title="Pin / Unpin selected">📌</button>
+          <button id="chat-sel-mute-btn" class="secondary-btn sm" type="button" title="Mute / Unmute selected">🔇 Mute</button>
+          <button id="chat-sel-delete-btn" class="danger-btn sm" type="button" title="Delete selected chats">🗑 Delete</button>
+          <button id="chat-sel-cancel-btn" class="icon-btn-sm" type="button" aria-label="Cancel chat selection">✕</button>
+        </div>
       </div>
 
       <div id="sidebar-section-title" class="sidebar-section-title hidden"></div>
@@ -435,6 +509,18 @@
           <button id="chat-search-close" class="icon-btn-sm" type="button" title="Close search" aria-label="Close search">✕</button>
         </div>
 
+        <!-- Pinned Message Banner -->
+        <div id="pinned-msg-bar" class="pinned-msg-bar hidden">
+          <button id="pinned-msg-jump" class="pinned-msg-jump" type="button">
+            <span class="pinned-msg-icon">📌</span>
+            <div class="pinned-msg-body">
+              <div class="pinned-msg-label">Pinned Message</div>
+              <div id="pinned-msg-preview" class="pinned-msg-preview"></div>
+            </div>
+          </button>
+          <button id="unpin-msg-btn" class="icon-btn-sm" type="button" title="Unpin message" aria-label="Unpin message">✕</button>
+        </div>
+
         <!-- Messages Container -->
         <div id="messages-viewport" class="messages-viewport">
           <div id="messages-list" class="messages-list"></div>
@@ -468,6 +554,37 @@
           <div id="channel-readonly-bar" class="channel-readonly-bar hidden">
             Broadcast Channel — Only admins can post messages
           </div>
+          <div id="dm-blocked-bar" class="dm-blocked-bar hidden">
+            <span id="dm-blocked-text">You blocked this user.</span>
+            <button id="dm-unblock-inline-btn" class="secondary-btn sm hidden" type="button">Unblock</button>
+          </div>
+          <div id="multi-select-bar" class="multi-select-bar hidden">
+            <span id="multi-select-count" class="multi-select-count">0 selected</span>
+            <div class="multi-select-actions">
+              <button id="multi-copy-btn" class="secondary-btn sm" type="button">Copy</button>
+              <button id="multi-forward-btn" class="primary-btn sm" type="button">Forward</button>
+              <button id="multi-delete-btn" class="danger-btn sm" type="button">Delete</button>
+              <button id="multi-cancel-btn" class="icon-btn-sm" type="button" aria-label="Cancel selection">✕</button>
+            </div>
+          </div>
+
+          <div id="edit-banner" class="reply-banner hidden">
+            <div class="reply-banner-bar"></div>
+            <div class="reply-banner-body">
+              <div class="reply-banner-sender">Editing message</div>
+              <div id="edit-banner-text" class="reply-banner-text"></div>
+            </div>
+            <button id="cancel-edit-btn" class="icon-btn-sm" type="button" aria-label="Cancel edit">✕</button>
+          </div>
+
+          <div id="voice-rec-bar" class="voice-rec-bar hidden">
+            <span class="voice-rec-dot"></span>
+            <span id="voice-rec-timer" class="voice-rec-timer">0:00</span>
+            <span class="voice-rec-hint">Recording voice note...</span>
+            <button id="voice-cancel-btn" class="secondary-btn sm" type="button">Cancel</button>
+            <button id="voice-send-btn" class="primary-btn sm" type="button">Send</button>
+          </div>
+
           <div id="reply-banner" class="reply-banner hidden">
             <div class="reply-banner-bar"></div>
             <div class="reply-banner-body">
@@ -512,7 +629,17 @@
               <div id="emoji-popover" class="emoji-popover hidden"></div>
             </div>
 
-            <button id="send-btn" class="send-btn" type="button" title="Send message" aria-label="Send message">
+            <button id="voice-rec-btn" class="send-btn voice-btn" type="button" title="Hold or tap to record voice message" aria-label="Voice message">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="23" />
+                <line x1="8" y1="23" x2="16" y2="23" />
+              </svg>
+            </button>
+
+            <button id="send-btn" class="send-btn hidden" type="button" title="Send message" aria-label="Send message">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                 <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
               </svg>
@@ -550,6 +677,15 @@
           <span class="info-label">Birthday</span>
           <span id="info-birthday" class="info-value"></span>
         </div>
+      </div>
+      <div id="info-chat-prefs" class="info-chat-prefs hidden">
+        <button id="info-pin-chat-btn" class="secondary-btn sm" type="button">📌 Pin Chat</button>
+        <button id="info-mute-chat-btn" class="secondary-btn sm" type="button">🔇 Mute</button>
+      </div>
+      <div id="info-friend-controls" class="info-friend-controls hidden"></div>
+      <div id="info-safety-controls" class="info-safety-controls hidden">
+        <button id="info-block-btn" class="secondary-btn sm" type="button">🚫 Block</button>
+        <button id="info-report-btn" class="secondary-btn sm" type="button">⚠️ Report</button>
       </div>
       <div id="info-room-controls" class="info-room-controls hidden"></div>
       <div class="info-tabs">
@@ -708,6 +844,19 @@
             </span>
             <span class="settings-nav-arrow">›</span>
           </button>
+          <button class="settings-nav-item" type="button" data-settings-tab="privacy">
+            <span class="settings-nav-badge badge-privacy">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+            </span>
+            <span class="settings-nav-text">
+              <strong>Privacy &amp; Safety</strong>
+              <small>Visibility, blocked users</small>
+            </span>
+            <span class="settings-nav-arrow">›</span>
+          </button>
           <button id="settings-tab-updates" class="settings-nav-item hidden" type="button" data-settings-tab="updates">
             <span class="settings-nav-badge badge-updates">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
@@ -722,6 +871,23 @@
               <small id="settings-nav-update-sub">Check for Android APK updates</small>
             </span>
             <span id="settings-nav-update-dot" class="update-dot hidden"></span>
+            <span class="settings-nav-arrow">›</span>
+          </button>
+          <button class="settings-nav-item danger-nav" type="button" data-settings-tab="delete">
+            <span class="settings-nav-badge badge-danger">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                <path d="M10 11v6" />
+                <path d="M14 11v6" />
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+              </svg>
+            </span>
+            <span class="settings-nav-text">
+              <strong>Delete Account</strong>
+              <small>Permanently remove account</small>
+            </span>
             <span class="settings-nav-arrow">›</span>
           </button>
         </aside>
@@ -756,6 +922,36 @@
                 <span class="settings-row-chevron">›</span>
               </button>
             </div>
+
+            <div class="settings-section-label">Share Profile Link &amp; QR Code</div>
+            <div class="share-qr-card">
+              <div id="settings-qr-box" class="settings-qr-box"></div>
+              <div class="share-qr-meta">
+                <input id="settings-profile-link" class="share-link-input" type="text" readonly />
+                <div class="share-qr-actions">
+                  <button id="copy-profile-link-btn" class="primary-btn sm" type="button">Copy Link</button>
+                  <button id="share-profile-link-btn" class="secondary-btn sm" type="button">Share</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section-label">Change Password</div>
+            <form id="change-password-form" class="settings-control-group password-change-box">
+              <div class="field-group">
+                <label for="chg-cur-password">Current Password</label>
+                <input id="chg-cur-password" type="password" placeholder="Enter current password" required autocomplete="current-password" />
+              </div>
+              <div class="field-group">
+                <label for="chg-new-password">New Password</label>
+                <input id="chg-new-password" type="password" placeholder="At least 6 characters" minlength="6" maxlength="128" required autocomplete="new-password" />
+              </div>
+              <div class="field-group">
+                <label for="chg-confirm-password">Confirm New Password</label>
+                <input id="chg-confirm-password" type="password" placeholder="Re-enter new password" minlength="6" maxlength="128" required autocomplete="new-password" />
+              </div>
+              <div id="chg-pass-error" class="form-error hidden" role="alert"></div>
+              <button id="chg-pass-submit" class="primary-btn sm" type="submit">Update Password</button>
+            </form>
 
             <div class="desktop-only-block">
               <div class="settings-section-label">Keyboard Shortcuts</div>
@@ -881,6 +1077,48 @@
             </div>
           </section>
 
+          <!-- Privacy & Safety Panel -->
+          <section id="settings-panel-privacy" class="settings-panel hidden">
+            <div class="settings-section-label">Who Can See My Info</div>
+            <div class="settings-control-group">
+              <div class="privacy-select-row">
+                <span>Email Address</span>
+                <select id="priv-email" class="privacy-select">
+                  <option value="everyone">Everyone</option>
+                  <option value="contacts">Contacts</option>
+                  <option value="nobody">Nobody</option>
+                </select>
+              </div>
+              <div class="privacy-select-row">
+                <span>Birthday</span>
+                <select id="priv-birthday" class="privacy-select">
+                  <option value="everyone">Everyone</option>
+                  <option value="contacts">Contacts</option>
+                  <option value="nobody">Nobody</option>
+                </select>
+              </div>
+              <div class="privacy-select-row">
+                <span>Last Seen &amp; Online</span>
+                <select id="priv-last-seen" class="privacy-select">
+                  <option value="everyone">Everyone</option>
+                  <option value="contacts">Contacts</option>
+                  <option value="nobody">Nobody</option>
+                </select>
+              </div>
+              <div class="privacy-select-row">
+                <span>Profile Photo</span>
+                <select id="priv-avatar" class="privacy-select">
+                  <option value="everyone">Everyone</option>
+                  <option value="contacts">Contacts</option>
+                  <option value="nobody">Nobody</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-section-label">Blocked Users</div>
+            <div id="blocked-users-list" class="blocked-users-list"></div>
+          </section>
+
           <!-- Android App Update Panel -->
           <section id="settings-panel-updates" class="settings-panel hidden">
             <div class="settings-section-label">Android App Version</div>
@@ -911,6 +1149,37 @@
               Website UI &amp; chat improvements update automatically. Native APK updates only appear when a new Android version is released on GitHub, and the downloaded APK is auto-deleted after updating to keep storage free.
             </div>
           </section>
+
+          <!-- Delete Account Panel (at the very end of Settings menu) -->
+          <section id="settings-panel-delete" class="settings-panel hidden">
+            <div class="settings-section-label danger-text">Delete Account</div>
+            <div class="settings-control-group danger-zone-box">
+              <p class="danger-zone-desc">
+                Deleting your account removes you from active users so your <strong>@username</strong> and
+                <strong>email address</strong> become available again. Existing audit logs and stored records remain
+                preserved for safety with your account marked as deleted.
+              </p>
+
+              <div id="delete-acc-step-request">
+                <button id="delete-acc-send-code-btn" class="danger-btn" type="button">Send Email Verification Code</button>
+              </div>
+
+              <div id="delete-acc-step-confirm" class="hidden">
+                <div id="delete-acc-dev-banner" class="verify-dev-banner hidden"></div>
+                <p id="delete-acc-masked-sub" class="danger-zone-sub"></p>
+                <div class="field-group">
+                  <label for="delete-acc-code">6-Digit Email Code</label>
+                  <input id="delete-acc-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456" />
+                </div>
+                <div class="field-group">
+                  <label for="delete-acc-phrase">Type <code>DELETE</code> to confirm</label>
+                  <input id="delete-acc-phrase" type="text" placeholder="DELETE" autocomplete="off" />
+                </div>
+                <div id="delete-acc-error" class="form-error hidden" role="alert"></div>
+                <button id="delete-acc-confirm-btn" class="danger-btn" type="button">Permanently Delete Account</button>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -923,6 +1192,12 @@
       <div id="msg-context-reactions" class="msg-context-reactions"></div>
       <div id="msg-context-card" class="msg-context-card"></div>
     </div>
+  </div>
+
+  <!-- Desktop Right-Click Sidebar Chat Context Menu -->
+  <div id="chat-context-overlay" class="msg-context-overlay hidden" aria-hidden="true">
+    <div id="chat-context-backdrop" class="msg-context-backdrop"></div>
+    <div id="chat-context-card" class="msg-context-card chat-context-card" role="menu"></div>
   </div>
 
   <!-- Anonymous Random Chat ("Stranger Lounge") Modal -->
@@ -1041,9 +1316,96 @@
     <button id="call-mini-hangup" class="call-mini-hangup" type="button" title="End Call">✕</button>
   </div>
 
+  <!-- Forward Message(s) Modal -->
+  <div id="forward-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="forward-modal-title">
+    <div class="modal-backdrop" id="forward-modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="forward-modal-title">Forward to...</h3>
+        <button id="forward-modal-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="forward-targets-list" class="modal-body forward-targets-list"></div>
+    </div>
+  </div>
+
+  <!-- Delete Confirmation Modal (Messages or Chats, with "Also delete for other user") -->
+  <div id="delete-confirm-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="delete-confirm-title">
+    <div class="modal-backdrop" id="delete-confirm-backdrop"></div>
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <h3 id="delete-confirm-title">Delete</h3>
+        <button id="delete-confirm-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p id="delete-confirm-desc" class="delete-confirm-desc"></p>
+        <label id="delete-everyone-row" class="delete-everyone-row hidden">
+          <input id="delete-everyone-checkbox" type="checkbox" />
+          <span id="delete-everyone-label">Also delete for other user</span>
+        </label>
+        <div class="delete-confirm-actions">
+          <button id="delete-confirm-cancel" class="secondary-btn" type="button">Cancel</button>
+          <button id="delete-confirm-submit" class="danger-btn" type="button">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Report User Modal -->
+  <div id="report-user-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="report-modal-title">
+    <div class="modal-backdrop" id="report-modal-backdrop"></div>
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <h3 id="report-modal-title">Report User</h3>
+        <button id="report-modal-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="report-user-form" class="modal-body">
+        <p id="report-target-label" class="delete-confirm-desc"></p>
+        <div class="field-group">
+          <label for="report-reason">Reason</label>
+          <select id="report-reason" class="privacy-select full-width">
+            <option value="spam">Spam or Scam</option>
+            <option value="harassment">Harassment or Abuse</option>
+            <option value="inappropriate">Inappropriate Content</option>
+            <option value="impersonation">Impersonation</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="report-details">Additional Details (optional)</label>
+          <textarea id="report-details" rows="3" maxlength="500" placeholder="Describe what happened..."></textarea>
+        </div>
+        <div class="delete-confirm-actions">
+          <button id="report-cancel-btn" class="secondary-btn" type="button">Cancel</button>
+          <button id="report-submit-btn" class="danger-btn" type="submit">Submit Report</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Shareable Profile Preview Modal (?user=handle) -->
+  <div id="user-preview-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-preview-name">
+    <div class="modal-backdrop" id="user-preview-backdrop"></div>
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <h3>User Profile</h3>
+        <button id="user-preview-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body user-preview-body">
+        <div id="user-preview-avatar" class="avatar avatar-xl"></div>
+        <h3 id="user-preview-name" class="user-preview-title"></h3>
+        <div id="user-preview-handle" class="user-preview-handle"></div>
+        <div id="user-preview-status" class="user-preview-status"></div>
+        <p id="user-preview-bio" class="user-preview-bio hidden"></p>
+        <div id="user-preview-meta" class="user-preview-meta"></div>
+        <div id="user-preview-actions" class="user-preview-actions"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
+  <script src="/qrcode.js?v=1"></script>
   <script src="/app.js?v=2"></script>
   <script src="/features.js?v=1"></script>
 </body>

@@ -2,7 +2,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-function createGroupService({ config, storage }) {
+function createGroupService({ config, storage, friends = null }) {
   function isGroupOrChannelId(chatId) {
     return /^(?:grp|chn)_[a-z0-9]{10,24}$/.test(String(chatId || ''));
   }
@@ -62,10 +62,16 @@ function createGroupService({ config, storage }) {
     const participantsSet = new Set([creator]);
     if (Array.isArray(memberUsernames)) {
       for (const raw of memberUsernames) {
-        const clean = String(raw || '').trim().toLowerCase();
+        const clean = String(raw || '').trim().replace(/^@+/, '').toLowerCase();
         if (!clean || clean === creator) continue;
         const found = await storage.getUserByUsername(clean);
-        if (found) participantsSet.add(found.username);
+        if (!found) continue;
+        if (friends && !(await friends.areFriends(creator, found.username))) {
+          const err = new Error(`You can only add friends to a group. Add @${found.username} as a friend or share the invite link!`);
+          err.statusCode = 403;
+          throw err;
+        }
+        participantsSet.add(found.username);
       }
     }
 
@@ -228,11 +234,16 @@ function createGroupService({ config, storage }) {
   }
 
   async function addMember(chatId, actorUsername, targetUsername) {
-    const cleanTarget = String(targetUsername || '').trim().toLowerCase();
+    const cleanTarget = String(targetUsername || '').trim().replace(/^@+/, '').toLowerCase();
     const user = await storage.getUserByUsername(cleanTarget);
     if (!user) {
       const err = new Error('User not found.');
       err.statusCode = 404;
+      throw err;
+    }
+    if (cleanTarget !== actorUsername && friends && !(await friends.areFriends(actorUsername, cleanTarget))) {
+      const err = new Error(`You can only add friends to a group or channel. Send @${cleanTarget} a friend request or share the invite link!`);
+      err.statusCode = 403;
       throw err;
     }
 

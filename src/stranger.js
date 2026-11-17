@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 
-function createStrangerService({ hub, storage }) {
+function createStrangerService({ hub, storage, friends = null }) {
   // username -> { username, interests: string[], language: string, joinedAt }
   const queue = new Map();
   // sessionId -> { id, users: [u1, u2], aliases: { [u]: 'Ghost #123' }, interests, language, messages: [], revealConsent: {}, revealed: false, createdAt }
@@ -298,9 +298,13 @@ function createStrangerService({ hub, storage }) {
       };
     }
 
-    // Mutual consent! Reveal profiles and create real DM friendship
+    // Mutual consent! Reveal profiles, add mutual friendship, and create real DM chat
     session.revealed = true;
     await storage.ensureChatFolder(u1, u2);
+    if (friends) {
+      await friends.addDirectFriendship(u1, u2);
+      hub.emitToUsers([u1, u2], 'friends_updated', {});
+    }
     const chatId = storage.getDmChatId(u1, u2);
     const [raw1, raw2] = await Promise.all([
       storage.getUserByUsername(u1),
@@ -330,16 +334,22 @@ function createStrangerService({ hub, storage }) {
 
   function reportPartner(username, reason = 'inappropriate') {
     const ended = endSessionFor(username, 'reported', 24 * 60 * 60 * 1000);
+    const cleanReason = String(reason || 'inappropriate').trim().slice(0, 160);
     if (ended && ended.partner) {
       reports.push({
         reporter: username,
         reported: ended.partner,
-        reason: String(reason || 'inappropriate').trim().slice(0, 160),
+        reason: cleanReason,
         at: new Date().toISOString()
       });
     }
     queue.delete(username);
-    return { ok: true, status: 'idle' };
+    return {
+      ok: true,
+      status: 'idle',
+      reported: ended ? ended.partner : null,
+      reason: cleanReason
+    };
   }
 
   return {

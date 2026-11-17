@@ -34,15 +34,28 @@
     me: null,
     chats: [],
     activeChatId: null,
+    activeChatMeta: null,
     activePeer: null,
     activeRoom: null,
+    pinnedMessage: null,
     messages: [],
     pendingFiles: [],
     replyTo: null,
+    editingMessage: null,
+    selectMode: false,
+    selectedMsgIds: new Set(),
+    chatSelectMode: false,
+    selectedChatIds: new Set(),
+    deleteConfirmState: null,
+    forwardMsgIds: [],
     searchQuery: '',
     sidebarFilter: 'all',
     unreadBelowCount: 0,
     firstUnreadMsgId: null,
+    friends: [],
+    friendRequestsSent: [],
+    friendRequestsReceived: [],
+    friendsSubTab: 'friends',
     browseMode: false,
     searchResults: [],
     typingPeers: new Map(), // chatId -> timeoutId
@@ -59,6 +72,12 @@
     pendingShare: null,
     queuedAndroidShare: null,
     sending: false,
+    blockedUsers: [],
+    pendingProfileLinkUser: null,
+    forgotVerificationId: null,
+    deleteAccountVerificationId: null,
+    reportTargetUsername: null,
+    previewedProfileUser: null,
     chatSearch: {
       open: false,
       query: '',
@@ -98,6 +117,20 @@
     loginPassword: $('login-password'),
     loginError: $('login-error'),
     loginSubmit: $('login-submit'),
+    forgotPasswordBtn: $('forgot-password-btn'),
+    forgotForm: $('forgot-form'),
+    forgotSubtitle: $('forgot-subtitle'),
+    forgotStepRequest: $('forgot-step-request'),
+    forgotIdentifier: $('forgot-identifier'),
+    forgotReqError: $('forgot-req-error'),
+    forgotSendBtn: $('forgot-send-btn'),
+    forgotStepReset: $('forgot-step-reset'),
+    forgotDevBanner: $('forgot-dev-banner'),
+    forgotCode: $('forgot-code'),
+    forgotNewPassword: $('forgot-new-password'),
+    forgotResetError: $('forgot-reset-error'),
+    forgotResetSubmit: $('forgot-reset-submit'),
+    forgotBackBtn: $('forgot-back-btn'),
     regUsername: $('reg-username'),
     regDisplayName: $('reg-displayname'),
     regEmail: $('reg-email'),
@@ -116,6 +149,8 @@
     drawerThemeBtn: $('drawer-theme-btn'),
     themeIcon: $('theme-icon'),
     drawerSettingsBtn: $('drawer-settings-btn'),
+    menuSavedMessages: $('menu-saved-messages'),
+    menuFriends: $('menu-friends'),
     menuFindUsers: $('menu-find-users'),
     menuEditProfile: $('menu-edit-profile'),
     menuSettings: $('menu-settings'),
@@ -137,6 +172,13 @@
     sidebarSectionTitle: $('sidebar-section-title'),
     sidebarTabs: $('sidebar-tabs'),
     unreadTabBadge: $('unread-tab-badge'),
+    friendsTabBadge: $('friends-tab-badge'),
+    chatSelectBar: $('chat-select-bar'),
+    chatSelectCount: $('chat-select-count'),
+    chatSelPinBtn: $('chat-sel-pin-btn'),
+    chatSelMuteBtn: $('chat-sel-mute-btn'),
+    chatSelDeleteBtn: $('chat-sel-delete-btn'),
+    chatSelCancelBtn: $('chat-sel-cancel-btn'),
     shareTargetBanner: $('share-target-banner'),
     shareTargetSummary: $('share-target-summary'),
     shareTargetCancel: $('share-target-cancel'),
@@ -163,6 +205,11 @@
     chatSearchNext: $('chat-search-next'),
     chatSearchClose: $('chat-search-close'),
 
+    pinnedMsgBar: $('pinned-msg-bar'),
+    pinnedMsgJump: $('pinned-msg-jump'),
+    pinnedMsgPreview: $('pinned-msg-preview'),
+    unpinMsgBtn: $('unpin-msg-btn'),
+
     messagesViewport: $('messages-viewport'),
     messagesList: $('messages-list'),
     typingBubbleRow: $('typing-bubble-row'),
@@ -170,6 +217,19 @@
     scrollUnreadBadge: $('scroll-unread-badge'),
     dropOverlay: $('drop-overlay'),
 
+    multiSelectBar: $('multi-select-bar'),
+    multiSelectCount: $('multi-select-count'),
+    multiCopyBtn: $('multi-copy-btn'),
+    multiForwardBtn: $('multi-forward-btn'),
+    multiDeleteBtn: $('multi-delete-btn'),
+    multiCancelBtn: $('multi-cancel-btn'),
+    editBanner: $('edit-banner'),
+    editBannerText: $('edit-banner-text'),
+    cancelEditBtn: $('cancel-edit-btn'),
+    voiceRecBar: $('voice-rec-bar'),
+    voiceRecTimer: $('voice-rec-timer'),
+    voiceCancelBtn: $('voice-cancel-btn'),
+    voiceSendBtn: $('voice-send-btn'),
     replyBanner: $('reply-banner'),
     replyBannerSender: $('reply-banner-sender'),
     replyBannerText: $('reply-banner-text'),
@@ -185,6 +245,10 @@
     emojiPopover: $('emoji-popover'),
     mentionPopover: $('mention-popover'),
     channelReadonlyBar: $('channel-readonly-bar'),
+    dmBlockedBar: $('dm-blocked-bar'),
+    dmBlockedText: $('dm-blocked-text'),
+    dmUnblockInlineBtn: $('dm-unblock-inline-btn'),
+    voiceRecBtn: $('voice-rec-btn'),
     sendBtn: $('send-btn'),
 
     infoDrawer: $('info-drawer'),
@@ -200,10 +264,58 @@
     infoBio: $('info-bio'),
     infoBirthdayRow: $('info-birthday-row'),
     infoBirthday: $('info-birthday'),
+    infoChatPrefs: $('info-chat-prefs'),
+    infoPinChatBtn: $('info-pin-chat-btn'),
+    infoMuteChatBtn: $('info-mute-chat-btn'),
+    infoFriendControls: $('info-friend-controls'),
+    infoSafetyControls: $('info-safety-controls'),
+    infoBlockBtn: $('info-block-btn'),
+    infoReportBtn: $('info-report-btn'),
     infoRoomControls: $('info-room-controls'),
     infoTabMedia: $('info-tab-media'),
     infoTabFiles: $('info-tab-files'),
     infoSharedContent: $('info-shared-content'),
+
+    forwardModal: $('forward-modal'),
+    forwardModalBackdrop: $('forward-modal-backdrop'),
+    forwardModalClose: $('forward-modal-close'),
+    forwardTargetsList: $('forward-targets-list'),
+
+    chatContextOverlay: $('chat-context-overlay'),
+    chatContextBackdrop: $('chat-context-backdrop'),
+    chatContextCard: $('chat-context-card'),
+
+    deleteConfirmModal: $('delete-confirm-modal'),
+    deleteConfirmBackdrop: $('delete-confirm-backdrop'),
+    deleteConfirmClose: $('delete-confirm-close'),
+    deleteConfirmTitle: $('delete-confirm-title'),
+    deleteConfirmDesc: $('delete-confirm-desc'),
+    deleteEveryoneRow: $('delete-everyone-row'),
+    deleteEveryoneCheckbox: $('delete-everyone-checkbox'),
+    deleteEveryoneLabel: $('delete-everyone-label'),
+    deleteConfirmCancel: $('delete-confirm-cancel'),
+    deleteConfirmSubmit: $('delete-confirm-submit'),
+
+    reportUserModal: $('report-user-modal'),
+    reportModalBackdrop: $('report-modal-backdrop'),
+    reportModalClose: $('report-modal-close'),
+    reportUserForm: $('report-user-form'),
+    reportTargetLabel: $('report-target-label'),
+    reportReason: $('report-reason'),
+    reportDetails: $('report-details'),
+    reportCancelBtn: $('report-cancel-btn'),
+    reportSubmitBtn: $('report-submit-btn'),
+
+    userPreviewModal: $('user-preview-modal'),
+    userPreviewBackdrop: $('user-preview-backdrop'),
+    userPreviewClose: $('user-preview-close'),
+    userPreviewAvatar: $('user-preview-avatar'),
+    userPreviewName: $('user-preview-name'),
+    userPreviewHandle: $('user-preview-handle'),
+    userPreviewStatus: $('user-preview-status'),
+    userPreviewBio: $('user-preview-bio'),
+    userPreviewMeta: $('user-preview-meta'),
+    userPreviewActions: $('user-preview-actions'),
 
     lightboxModal: $('lightbox-modal'),
     lightboxBackdrop: $('lightbox-backdrop'),
@@ -246,6 +358,30 @@
     settingsBirthday: $('settings-birthday'),
     settingsOpenProfile: $('settings-open-profile'),
     settingsGotoThemes: $('settings-goto-themes'),
+    settingsQrBox: $('settings-qr-box'),
+    settingsProfileLink: $('settings-profile-link'),
+    copyProfileLinkBtn: $('copy-profile-link-btn'),
+    shareProfileLinkBtn: $('share-profile-link-btn'),
+    changePasswordForm: $('change-password-form'),
+    chgCurPassword: $('chg-cur-password'),
+    chgNewPassword: $('chg-new-password'),
+    chgConfirmPassword: $('chg-confirm-password'),
+    chgPassError: $('chg-pass-error'),
+    chgPassSubmit: $('chg-pass-submit'),
+    privEmail: $('priv-email'),
+    privBirthday: $('priv-birthday'),
+    privLastSeen: $('priv-last-seen'),
+    privAvatar: $('priv-avatar'),
+    blockedUsersList: $('blocked-users-list'),
+    deleteAccSendCodeBtn: $('delete-acc-send-code-btn'),
+    deleteAccStepRequest: $('delete-acc-step-request'),
+    deleteAccStepConfirm: $('delete-acc-step-confirm'),
+    deleteAccDevBanner: $('delete-acc-dev-banner'),
+    deleteAccMaskedSub: $('delete-acc-masked-sub'),
+    deleteAccCode: $('delete-acc-code'),
+    deleteAccPhrase: $('delete-acc-phrase'),
+    deleteAccError: $('delete-acc-error'),
+    deleteAccConfirmBtn: $('delete-acc-confirm-btn'),
     themeCardsGrid: $('theme-cards-grid'),
     accentSwatches: $('accent-swatches'),
     prefWallpaper: $('pref-wallpaper'),
@@ -327,6 +463,11 @@
       els.unreadTabBadge.textContent = formatCompactCount(totalUnread);
       els.unreadTabBadge.classList.toggle('hidden', totalUnread <= 0);
     }
+    if (els.friendsTabBadge) {
+      const incomingCount = Array.isArray(state.friendRequestsReceived) ? state.friendRequestsReceived.length : 0;
+      els.friendsTabBadge.textContent = formatCompactCount(incomingCount);
+      els.friendsTabBadge.classList.toggle('hidden', incomingCount <= 0);
+    }
     if (els.scrollUnreadBadge) {
       const below = Number(state.unreadBelowCount || 0);
       els.scrollUnreadBadge.textContent = formatCompactCount(below);
@@ -348,17 +489,41 @@
   }
 
   function linkifyText(text) {
-    const escaped = escapeHtml(text);
-    const withLinks = escaped.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
-      return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+    let out = escapeHtml(text);
+    const tokens = [];
+    const stash = (html) => {
+      const idx = tokens.length;
+      tokens.push(html);
+      return `\u0000T${idx}\u0000`;
+    };
+
+    // Fenced code blocks ```code``` and inline `code`
+    out = out.replace(/```(?:\w+\n)?([\s\S]+?)```/g, (_, code) => {
+      return stash(`<pre class="msg-code-block"><code>${code.replace(/^\n+|\n+$/g, '')}</code></pre>`);
     });
-    return withLinks
-      .split(/(<a\b[^>]*>.*?<\/a>)/g)
-      .map((part) => {
-        if (part.startsWith('<a ')) return part;
-        return part.replace(/(^|[^a-zA-Z0-9_./])@([a-zA-Z0-9_]{2,24})\b/g, '$1<span class="mention-tag" data-mention="$2">@$2</span>');
-      })
-      .join('');
+    out = out.replace(/`([^\n`]+)`/g, (_, code) => {
+      return stash(`<code class="msg-inline-code">${code}</code>`);
+    });
+
+    // URLs
+    out = out.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+      return stash(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+    });
+
+    // @mentions
+    out = out.replace(/(^|[^a-zA-Z0-9_./])@([a-zA-Z0-9_]{2,24})\b/g, (full, pre, uname) => {
+      return `${pre}${stash(`<span class="mention-tag" data-mention="${uname}">@${uname}</span>`)}`;
+    });
+
+    // Spoilers ||secret||
+    out = out.replace(/\|\|([^\n]+?)\|\|/g, '<span class="msg-spoiler" role="button" tabindex="0" title="Click to reveal">$1</span>');
+    // Bold **text**
+    out = out.replace(/\*\*([^\s*](?:[^\n*]*?[^\s*])?)\*\*/g, '<strong>$1</strong>');
+    // Italic *text* and boundary-safe _text_
+    out = out.replace(/\*([^\s*](?:[^\n*]*?[^\s*])?)\*/g, '<em>$1</em>');
+    out = out.replace(/(^|[\s(>])_([^\s_](?:[^\n_]*?[^\s_])?)_(?=$|[\s).,!?:;<])/g, '$1<em>$2</em>');
+
+    return out.replace(/\u0000T(\d+)\u0000/g, (_, idx) => tokens[Number(idx)] || '');
   }
 
   function formatBytes(bytes) {
@@ -401,7 +566,7 @@
   }
 
   function formatLastSeen(iso) {
-    if (!iso) return 'offline';
+    if (!iso) return 'last seen recently';
     const d = new Date(iso);
     const diffSec = Math.floor((Date.now() - d.getTime()) / 1000);
     if (diffSec < 60) return 'last seen just now';
@@ -814,6 +979,10 @@
   }
 
   async function openChatByIdOrSender(chatId, senderUsername) {
+    if (chatId && String(chatId).startsWith('saved_')) {
+      await openSavedMessages();
+      return;
+    }
     if (chatId && (String(chatId).startsWith('grp_') || String(chatId).startsWith('chn_'))) {
       await openRoomById(chatId);
       return;
@@ -824,6 +993,10 @@
     }
     if (chatId && state.me) {
       const chat = state.chats.find((c) => c.id === chatId);
+      if (chat && chat.type === 'saved') {
+        await openSavedMessages();
+        return;
+      }
       if (chat && (chat.type === 'group' || chat.type === 'channel')) {
         await openRoomById(chat.id);
         return;
@@ -947,6 +1120,173 @@
     els.settingsBackBtn.classList.toggle('hidden', !isMobileSettingsViewport());
   }
 
+  function renderSettingsQrAndLink() {
+    if (!state.me) return;
+    const origin = (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin !== 'null')
+      ? window.location.origin
+      : 'https://chat.bitdev.fun';
+    const profileUrl = `${origin}/?user=${encodeURIComponent(state.me.username)}`;
+    if (els.settingsProfileLink) {
+      els.settingsProfileLink.value = profileUrl;
+    }
+    if (els.settingsQrBox) {
+      if (window.VibeRoomQR && typeof window.VibeRoomQR.renderSvg === 'function') {
+        try {
+          els.settingsQrBox.innerHTML = window.VibeRoomQR.renderSvg(profileUrl, { margin: 3 });
+        } catch {
+          els.settingsQrBox.textContent = 'QR unavailable';
+        }
+      }
+    }
+  }
+
+  function renderBlockedUsersList() {
+    if (!els.blockedUsersList) return;
+    const list = state.blockedUsers || [];
+    if (list.length === 0) {
+      els.blockedUsersList.innerHTML = '<div class="blocked-empty">No blocked users.</div>';
+      return;
+    }
+    els.blockedUsersList.innerHTML = list.map((u) => `
+      <div class="blocked-user-row">
+        <div class="avatar" style="background: ${escapeHtml(u.avatarColor || 'var(--accent)')}">${escapeHtml(initialsFor(u))}</div>
+        <div class="blocked-user-meta">
+          <div class="blocked-user-name">${escapeHtml(u.displayName || u.username)}</div>
+          <div class="blocked-user-sub">@${escapeHtml(u.username)}</div>
+        </div>
+        <button type="button" class="secondary-btn sm" data-unblock-user="${escapeHtml(u.username)}">Unblock</button>
+      </div>
+    `).join('');
+  }
+
+  async function refreshBlockedUsers() {
+    if (!state.me) return;
+    try {
+      const data = await api('/api/users/blocked');
+      state.blockedUsers = data.blocked || [];
+      renderBlockedUsersList();
+    } catch {
+      // Ignore transient errors
+    }
+  }
+
+  function syncPrivacyUI() {
+    const priv = (state.me && state.me.privacy) || { email: 'everyone', birthday: 'everyone', lastSeen: 'everyone', avatar: 'everyone' };
+    if (els.privEmail) els.privEmail.value = priv.email || 'everyone';
+    if (els.privBirthday) els.privBirthday.value = priv.birthday || 'everyone';
+    if (els.privLastSeen) els.privLastSeen.value = priv.lastSeen || 'everyone';
+    if (els.privAvatar) els.privAvatar.value = priv.avatar || 'everyone';
+  }
+
+  function resetDeleteAccountPanel() {
+    state.deleteAccountVerificationId = null;
+    if (els.deleteAccStepRequest) els.deleteAccStepRequest.classList.remove('hidden');
+    if (els.deleteAccStepConfirm) els.deleteAccStepConfirm.classList.add('hidden');
+    if (els.deleteAccDevBanner) els.deleteAccDevBanner.classList.add('hidden');
+    if (els.deleteAccCode) els.deleteAccCode.value = '';
+    if (els.deleteAccPhrase) els.deleteAccPhrase.value = '';
+    if (els.deleteAccError) els.deleteAccError.classList.add('hidden');
+  }
+
+  function openReportModal(targetUsername) {
+    if (!els.reportUserModal || !targetUsername) return;
+    state.reportTargetUsername = targetUsername;
+    if (els.reportTargetLabel) {
+      els.reportTargetLabel.textContent = `Report @${targetUsername} for inappropriate behavior or spam. Reports are recorded for moderation review.`;
+    }
+    if (els.reportReason) els.reportReason.value = 'spam';
+    if (els.reportDetails) els.reportDetails.value = '';
+    els.reportUserModal.classList.remove('hidden');
+  }
+
+  function closeReportModal() {
+    state.reportTargetUsername = null;
+    if (els.reportUserModal) els.reportUserModal.classList.add('hidden');
+  }
+
+  async function performBlockToggle(targetUsername, shouldBlock) {
+    const clean = String(targetUsername || '').trim().toLowerCase();
+    if (!clean) return;
+    try {
+      if (shouldBlock) {
+        await api('/api/users/block', { method: 'POST', body: { targetUsername: clean } });
+        showToast(`Blocked @${clean}`, 'success');
+      } else {
+        await api(`/api/users/block/${encodeURIComponent(clean)}`, { method: 'DELETE' });
+        showToast(`Unblocked @${clean}`, 'success');
+      }
+      if (state.activePeer && state.activePeer.username === clean) {
+        state.activePeer.blockedByMe = shouldBlock;
+        syncComposerAccessForActiveChat();
+        if (state.infoOpen) renderInfoDrawer();
+      }
+      await refreshBlockedUsers();
+      await refreshChats();
+      if (state.previewedProfileUser && state.previewedProfileUser.username === clean) {
+        await openUserProfilePreviewModal(clean);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  function closeUserPreviewModal() {
+    state.previewedProfileUser = null;
+    if (els.userPreviewModal) els.userPreviewModal.classList.add('hidden');
+  }
+
+  async function openUserProfilePreviewModal(username) {
+    if (!els.userPreviewModal || !username) return;
+    const clean = String(username).trim().replace(/^@+/, '').toLowerCase();
+    if (!clean) return;
+    if (state.me && clean === state.me.username) {
+      openSettingsModal('general');
+      return;
+    }
+    try {
+      const data = await api(`/api/users/profile/${encodeURIComponent(clean)}`);
+      const u = data.user;
+      if (!u) return;
+      state.previewedProfileUser = u;
+      renderAvatar(els.userPreviewAvatar, u);
+      if (els.userPreviewName) els.userPreviewName.textContent = u.displayName || u.username;
+      if (els.userPreviewHandle) els.userPreviewHandle.textContent = `@${u.username}`;
+      if (els.userPreviewStatus) {
+        els.userPreviewStatus.textContent = u.online ? 'online' : formatLastSeen(u.lastSeen);
+      }
+      if (els.userPreviewBio) {
+        if (u.bio) {
+          els.userPreviewBio.textContent = u.bio;
+          els.userPreviewBio.classList.remove('hidden');
+        } else {
+          els.userPreviewBio.classList.add('hidden');
+        }
+      }
+      if (els.userPreviewMeta) {
+        const metaLines = [];
+        if (u.email) metaLines.push(`<div><strong>Email:</strong> ${escapeHtml(u.email)}</div>`);
+        const bday = formatBirthdayLabel(u.birthday);
+        if (bday) metaLines.push(`<div><strong>Birthday:</strong> ${escapeHtml(bday.text)}</div>`);
+        els.userPreviewMeta.innerHTML = metaLines.join('');
+      }
+      if (els.userPreviewActions) {
+        const uname = escapeHtml(u.username);
+        const friendBtns = renderFriendActionBtnHtml(u.username, u.relationship || 'none');
+        const blockLabel = u.blockedByMe ? 'Unblock' : 'Block';
+        const blockAct = u.blockedByMe ? 'unblock' : 'block';
+        els.userPreviewActions.innerHTML = `
+          <button type="button" class="primary-btn sm" data-preview-message="${uname}">Message</button>
+          ${friendBtns}
+          <button type="button" class="secondary-btn sm" data-preview-block="${blockAct}" data-preview-user="${uname}">${blockLabel}</button>
+          <button type="button" class="danger-btn sm" data-preview-report="${uname}">Report</button>
+        `;
+      }
+      els.userPreviewModal.classList.remove('hidden');
+    } catch (err) {
+      showToast(err.message || 'User not found.', 'error');
+    }
+  }
+
   function openSettingsModal(initialTab = 'general') {
     if (state.me) {
       const displayName = state.me.displayName || state.me.username;
@@ -969,6 +1309,13 @@
       if (els.settingsMobileAvatar) renderAvatar(els.settingsMobileAvatar, state.me);
       if (els.settingsMobileDisplayName) els.settingsMobileDisplayName.textContent = displayName;
       if (els.settingsMobileSub) els.settingsMobileSub.textContent = `@${state.me.username} • ${state.me.email}`;
+
+      renderSettingsQrAndLink();
+      syncPrivacyUI();
+      refreshBlockedUsers();
+      resetDeleteAccountPanel();
+      if (els.chgPassError) els.chgPassError.classList.add('hidden');
+      if (els.changePasswordForm) els.changePasswordForm.reset();
     }
     syncSettingsUI();
     if (isMobileSettingsViewport() && (!initialTab || initialTab === 'menu' || initialTab === 'general')) {
@@ -984,13 +1331,13 @@
   }
 
   function switchSettingsTab(tab) {
-    const valid = ['general', 'themes', 'chat', 'updates'].includes(tab) ? tab : 'general';
+    const valid = ['general', 'themes', 'chat', 'privacy', 'updates', 'delete'].includes(tab) ? tab : 'general';
     settingsMobileView = 'detail';
     if (els.settingsCard) els.settingsCard.setAttribute('data-mobile-view', 'detail');
     els.settingsNav.querySelectorAll('[data-settings-tab]').forEach((btn) => {
       btn.classList.toggle('active', btn.dataset.settingsTab === valid);
     });
-    ['general', 'themes', 'chat', 'updates'].forEach((name) => {
+    ['general', 'themes', 'chat', 'privacy', 'updates', 'delete'].forEach((name) => {
       const panel = $(`settings-panel-${name}`);
       if (panel) panel.classList.toggle('hidden', name !== valid);
     });
@@ -998,8 +1345,11 @@
       general: 'Account & Profile',
       themes: 'Appearance',
       chat: 'Notifications & Sounds',
-      updates: 'App Updates'
+      privacy: 'Privacy & Safety',
+      updates: 'App Updates',
+      delete: 'Delete Account'
     };
+    if (valid === 'privacy') refreshBlockedUsers();
     els.settingsModalTitle.textContent = isMobileSettingsViewport()
       ? (titles[valid] || 'Settings')
       : (valid === 'general' ? 'Settings' : (titles[valid] || 'Settings'));
@@ -1197,11 +1547,34 @@
     if (first) first.focus();
   }
 
+  function showForgotPasswordStep() {
+    clearVerificationTimers();
+    state.forgotVerificationId = null;
+    if (els.authTabs) els.authTabs.classList.add('hidden');
+    if (els.loginForm) els.loginForm.classList.add('hidden');
+    if (els.registerForm) els.registerForm.classList.add('hidden');
+    if (els.verifyForm) els.verifyForm.classList.add('hidden');
+    if (els.forgotForm) els.forgotForm.classList.remove('hidden');
+    if (els.forgotStepRequest) els.forgotStepRequest.classList.remove('hidden');
+    if (els.forgotStepReset) els.forgotStepReset.classList.add('hidden');
+    if (els.forgotReqError) els.forgotReqError.classList.add('hidden');
+    if (els.forgotResetError) els.forgotResetError.classList.add('hidden');
+    if (els.forgotDevBanner) els.forgotDevBanner.classList.add('hidden');
+    if (els.forgotSubtitle) {
+      els.forgotSubtitle.textContent = 'Enter your username or email to get a 6-digit verification code.';
+    }
+    if (els.forgotIdentifier) {
+      els.forgotIdentifier.value = els.loginIdentifier ? els.loginIdentifier.value.trim() : '';
+      els.forgotIdentifier.focus();
+    }
+  }
+
   function switchAuthTab(mode) {
     clearVerificationTimers();
     const isLogin = mode === 'login';
     els.authTabs.classList.remove('hidden');
     els.verifyForm.classList.add('hidden');
+    if (els.forgotForm) els.forgotForm.classList.add('hidden');
     els.tabLogin.classList.toggle('active', isLogin);
     els.tabRegister.classList.toggle('active', !isLogin);
     els.tabLogin.setAttribute('aria-selected', String(isLogin));
@@ -1250,9 +1623,157 @@
   // =========================================================================
   // Sidebar Rendering (Chats & User Search)
   // =========================================================================
+  function getRelationshipForUser(username) {
+    const target = String(username || '').trim().toLowerCase();
+    if (!target) return 'none';
+    if (state.me && state.me.username === target) return 'self';
+    if (state.friends.some((f) => f.username === target)) return 'friends';
+    if (state.friendRequestsSent.some((r) => r.user && r.user.username === target)) return 'outgoing_pending';
+    if (state.friendRequestsReceived.some((r) => r.user && r.user.username === target)) return 'incoming_pending';
+    return 'none';
+  }
+
+  function renderFriendActionBtnHtml(username, rel) {
+    const u = escapeHtml(username);
+    if (rel === 'friends') {
+      return `<button type="button" class="friend-action-btn danger" data-friend-action="unfriend" data-friend-user="${u}">Unfriend</button>`;
+    }
+    if (rel === 'outgoing_pending') {
+      return `<button type="button" class="friend-action-btn secondary" data-friend-action="cancel" data-friend-user="${u}">Cancel Req</button>`;
+    }
+    if (rel === 'incoming_pending') {
+      return `
+        <button type="button" class="friend-action-btn primary" data-friend-action="accept" data-friend-user="${u}">Accept</button>
+        <button type="button" class="friend-action-btn secondary" data-friend-action="decline" data-friend-user="${u}">Decline</button>
+      `;
+    }
+    return `<button type="button" class="friend-action-btn primary" data-friend-action="request" data-friend-user="${u}">+ Add Friend</button>`;
+  }
+
+  function renderFriendsSidebarPanel() {
+    els.sidebarSectionTitle.classList.add('hidden');
+    const friendsList = state.friends || [];
+    const sentList = state.friendRequestsSent || [];
+    const recList = state.friendRequestsReceived || [];
+    const sub = state.friendsSubTab || 'friends';
+
+    const subTabsHtml = `
+      <div class="friends-subtabs">
+        <button type="button" class="friends-subtab ${sub === 'friends' ? 'active' : ''}" data-friends-subtab="friends">
+          Friends (${friendsList.length})
+        </button>
+        <button type="button" class="friends-subtab ${sub === 'requests' ? 'active' : ''}" data-friends-subtab="requests">
+          Requests (${recList.length})
+        </button>
+        <button type="button" class="friends-subtab ${sub === 'sent' ? 'active' : ''}" data-friends-subtab="sent">
+          Sent (${sentList.length})
+        </button>
+      </div>
+    `;
+
+    let bodyHtml = '';
+    if (sub === 'sent') {
+      if (sentList.length === 0) {
+        bodyHtml = `
+          <div class="sidebar-empty">
+            No pending sent friend requests.<br/>
+            Search by exact <strong>@username</strong> or <strong>email</strong> above to add friends!
+          </div>
+        `;
+      } else {
+        bodyHtml = sentList.map((item) => {
+          const u = item.user;
+          return `
+            <div class="chat-row" data-open-user="${escapeHtml(u.username)}" role="listitem">
+              <div class="avatar-wrap">
+                <div class="avatar" style="background: ${escapeHtml(u.avatarColor || 'var(--accent)')}">
+                  ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(u))}
+                </div>
+              </div>
+              <div class="chat-row-body">
+                <div class="chat-row-top">
+                  <span class="chat-row-name">${escapeHtml(u.displayName || u.username)}</span>
+                </div>
+                <div class="chat-row-bottom">
+                  <span class="chat-row-sub">@${escapeHtml(u.username)} • Pending</span>
+                  <button type="button" class="friend-action-btn secondary" data-friend-action="cancel" data-friend-user="${escapeHtml(u.username)}">Cancel</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    } else if (sub === 'requests') {
+      if (recList.length === 0) {
+        bodyHtml = `<div class="sidebar-empty">No incoming friend requests right now.</div>`;
+      } else {
+        bodyHtml = recList.map((item) => {
+          const u = item.user;
+          return `
+            <div class="chat-row" data-open-user="${escapeHtml(u.username)}" role="listitem">
+              <div class="avatar-wrap">
+                <div class="avatar" style="background: ${escapeHtml(u.avatarColor || 'var(--accent)')}">
+                  ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(u))}
+                </div>
+              </div>
+              <div class="chat-row-body">
+                <div class="chat-row-top">
+                  <span class="chat-row-name">${escapeHtml(u.displayName || u.username)}</span>
+                </div>
+                <div class="chat-row-bottom">
+                  <span class="chat-row-sub">@${escapeHtml(u.username)} wants to be friends</span>
+                  <div class="friend-row-btns">
+                    <button type="button" class="friend-action-btn primary" data-friend-action="accept" data-friend-user="${escapeHtml(u.username)}">Accept</button>
+                    <button type="button" class="friend-action-btn secondary" data-friend-action="decline" data-friend-user="${escapeHtml(u.username)}">Decline</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    } else {
+      if (friendsList.length === 0) {
+        bodyHtml = `
+          <div class="sidebar-empty">
+            No friends added yet.<br/>
+            Search a person's exact <strong>@username</strong> or <strong>email</strong> above and send a friend request!
+          </div>
+        `;
+      } else {
+        bodyHtml = friendsList.map((u) => {
+          const isOnline = state.onlineUsers.has(u.username) || u.online;
+          return `
+            <div class="chat-row" data-open-user="${escapeHtml(u.username)}" role="listitem">
+              <div class="avatar-wrap">
+                <div class="avatar" style="background: ${escapeHtml(u.avatarColor || 'var(--accent)')}">
+                  ${u.avatarUrl ? `<img src="${escapeHtml(u.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(u))}
+                </div>
+                ${isOnline ? '<span class="online-dot"></span>' : ''}
+              </div>
+              <div class="chat-row-body">
+                <div class="chat-row-top">
+                  <span class="chat-row-name">${escapeHtml(u.displayName || u.username)}</span>
+                  <span class="chat-row-time">${isOnline ? 'online' : ''}</span>
+                </div>
+                <div class="chat-row-bottom">
+                  <span class="chat-row-sub">@${escapeHtml(u.username)}</span>
+                  <button type="button" class="friend-action-btn danger" data-friend-action="unfriend" data-friend-user="${escapeHtml(u.username)}">Unfriend</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    els.sidebarList.innerHTML = `${subTabsHtml}${bodyHtml}`;
+  }
+
   function renderSidebar() {
-    const isSearching = state.searchQuery.trim().length > 0 || state.browseMode;
-    els.clearSearchBtn.classList.toggle('hidden', !state.searchQuery.trim() && !state.browseMode);
+    const trimmedQuery = state.searchQuery.trim();
+    const isSearching = trimmedQuery.length > 0 || state.browseMode;
+    els.clearSearchBtn.classList.toggle('hidden', !trimmedQuery && !state.browseMode);
 
     if (els.sidebarTabs) {
       els.sidebarTabs.classList.toggle('hidden', isSearching);
@@ -1264,15 +1785,25 @@
 
     if (isSearching) {
       els.sidebarSectionTitle.classList.remove('hidden');
-      els.sidebarSectionTitle.textContent = state.searchQuery.trim()
-        ? `Search Results (${state.searchResults.length})`
-        : `Directory (${state.searchResults.length} users)`;
+      els.sidebarSectionTitle.textContent = trimmedQuery
+        ? `Exact Match (${state.searchResults.length})`
+        : 'Find Someone';
+
+      if (!trimmedQuery) {
+        els.sidebarList.innerHTML = `
+          <div class="sidebar-empty">
+            Type an <strong>exact @username</strong> or <strong>exact email</strong> in the search box above.<br/>
+            User directories are hidden for privacy.
+          </div>
+        `;
+        return;
+      }
 
       if (state.searchResults.length === 0) {
         els.sidebarList.innerHTML = `
           <div class="sidebar-empty">
-            No users found matching "<strong>${escapeHtml(state.searchQuery)}</strong>".<br/>
-            Try searching by exact email or @username.
+            No user found with exact username or email "<strong>${escapeHtml(trimmedQuery)}</strong>".<br/>
+            Make sure you entered the full @username or email address.
           </div>
         `;
         return;
@@ -1281,6 +1812,7 @@
       els.sidebarList.innerHTML = state.searchResults.map((user) => {
         const isOnline = state.onlineUsers.has(user.username) || user.online;
         const isActive = state.activePeer && state.activePeer.username === user.username;
+        const rel = user.relationship || getRelationshipForUser(user.username);
         return `
           <div class="chat-row ${isActive ? 'active' : ''}" data-open-user="${escapeHtml(user.username)}" role="listitem">
             <div class="avatar-wrap">
@@ -1295,12 +1827,20 @@
                 <span class="chat-row-time">${isOnline ? 'online' : ''}</span>
               </div>
               <div class="chat-row-bottom">
-                <span class="chat-row-sub">@${escapeHtml(user.username)} • ${escapeHtml(user.email)}</span>
+                <span class="chat-row-sub">@${escapeHtml(user.username)}</span>
+                <div class="friend-row-btns">
+                  ${renderFriendActionBtnHtml(user.username, rel)}
+                </div>
               </div>
             </div>
           </div>
         `;
       }).join('');
+      return;
+    }
+
+    if (state.sidebarFilter === 'friends') {
+      renderFriendsSidebarPanel();
       return;
     }
 
@@ -1313,9 +1853,9 @@
       els.sidebarList.innerHTML = `
         <div class="sidebar-empty">
           No conversations yet.<br/>
-          Search for someone by <strong>username</strong> or <strong>email</strong> above to start chatting!
+          Search someone by exact <strong>@username</strong> or <strong>email</strong> above to add friends and chat!
           <div>
-            <button id="empty-browse-btn" class="secondary-btn" type="button">Browse Registered Users</button>
+            <button id="empty-browse-btn" class="secondary-btn" type="button">Find by Username / Email</button>
           </div>
         </div>
       `;
@@ -1344,54 +1884,65 @@
     }
 
     els.sidebarList.innerHTML = visibleChats.map((chat) => {
+      const isSaved = chat.type === 'saved';
       const isRoom = chat.type === 'group' || chat.type === 'channel';
       const peer = chat.peer;
-      const isOnline = !isRoom && peer && (state.onlineUsers.has(peer.username) || peer.online);
+      const isOnline = !isRoom && !isSaved && peer && (state.onlineUsers.has(peer.username) || peer.online);
       const isActive = state.activeChatId === chat.id;
       const isTyping = state.typingPeers.has(chat.id);
       const last = chat.lastMessage;
       const draftObj = state.drafts[chat.id];
       const draftText = draftObj && draftObj.text ? draftObj.text.trim() : '';
-      let previewHtml = escapeHtml(isRoom ? (chat.description || 'No messages yet') : 'Start chatting...');
+      let previewHtml = escapeHtml(isSaved ? 'Personal cloud notes & files' : (isRoom ? (chat.description || 'No messages yet') : 'Start chatting...'));
       if (isTyping) {
         previewHtml = escapeHtml('typing...');
       } else if (draftText) {
         previewHtml = `<span class="draft-prefix">Draft:</span> ${escapeHtml(draftText.replace(/\s+/g, ' '))}`;
       } else if (last) {
         const prefix = last.sender === state.me.username
-          ? 'You: '
+          ? (isSaved ? '' : 'You: ')
           : (isRoom && last.sender && last.sender !== 'system' ? `${last.sender}: ` : '');
         previewHtml = escapeHtml(`${prefix}${last.preview || ''}`);
       }
       const timeStr = last ? formatSidebarTime(last.createdAt) : '';
       const unread = Number(chat.unreadCount || 0);
-      const avatarSeed = isRoom
-        ? { displayName: chat.title, avatarColor: chat.avatarColor || 'var(--accent)' }
-        : peer;
-      const rowTitle = isRoom ? chat.title : (peer.displayName || peer.username);
+      const avatarSeed = isSaved
+        ? { displayName: 'Saved Messages', avatarColor: 'var(--accent)' }
+        : (isRoom ? { displayName: chat.title, avatarColor: chat.avatarColor || 'var(--accent)' } : peer);
+      const rowTitle = isSaved ? 'Saved Messages' : (isRoom ? chat.title : (peer.displayName || peer.username));
       const roomTag = isRoom
         ? `<span class="room-kind-tag">${chat.type === 'channel' ? 'Channel' : 'Group'}</span>`
         : '';
-      const openAttr = isRoom
+      const prefBadges = `${chat.isPinned ? '<span class="chat-pin-badge" title="Pinned chat">📌</span>' : ''}${chat.isMuted ? '<span class="chat-mute-badge" title="Muted">🔇</span>' : ''}`;
+      const openAttr = (isRoom || isSaved)
         ? `data-open-chat="${escapeHtml(chat.id)}"`
         : `data-open-user="${escapeHtml(peer.username)}"`;
+      const avatarInner = isSaved
+        ? '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
+        : (!isRoom && peer && peer.avatarUrl ? `<img src="${escapeHtml(peer.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(avatarSeed)));
+
+      const isChatSelected = state.chatSelectMode && state.selectedChatIds.has(chat.id);
+      const selectChatChk = state.chatSelectMode
+        ? `<span class="chat-select-check">${isChatSelected ? '✓' : ''}</span>`
+        : '';
 
       return `
-        <div class="chat-row ${isActive ? 'active' : ''}" ${openAttr} role="listitem" tabindex="0">
+        <div class="chat-row ${isActive ? 'active' : ''}${chat.isPinned ? ' is-pinned' : ''}${state.chatSelectMode ? ' select-mode' : ''}${isChatSelected ? ' selected' : ''}" data-chat-id="${escapeHtml(chat.id)}" ${openAttr} role="listitem" tabindex="0">
+          ${selectChatChk}
           <div class="avatar-wrap">
-            <div class="avatar" style="background: ${escapeHtml((avatarSeed && avatarSeed.avatarColor) || 'var(--accent)')}">
-              ${!isRoom && peer && peer.avatarUrl ? `<img src="${escapeHtml(peer.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(avatarSeed))}
+            <div class="avatar${isSaved ? ' saved-avatar' : ''}" style="background: ${escapeHtml((avatarSeed && avatarSeed.avatarColor) || 'var(--accent)')}">
+              ${avatarInner}
             </div>
             ${isOnline ? '<span class="online-dot"></span>' : ''}
           </div>
           <div class="chat-row-body">
             <div class="chat-row-top">
-              <span class="chat-row-name">${roomTag}${escapeHtml(rowTitle)}</span>
+              <span class="chat-row-name">${roomTag}${escapeHtml(rowTitle)}${prefBadges}</span>
               <span class="chat-row-time">${escapeHtml(timeStr)}</span>
             </div>
             <div class="chat-row-bottom">
               <span class="chat-row-preview">${previewHtml}</span>
-              ${unread > 0 ? `<span class="unread-badge">${escapeHtml(formatCompactCount(unread))}</span>` : ''}
+              ${unread > 0 ? `<span class="unread-badge${chat.isMuted ? ' muted' : ''}">${escapeHtml(formatCompactCount(unread))}</span>` : ''}
             </div>
           </div>
         </div>
@@ -1416,9 +1967,61 @@
   function triggerBrowseUsers() {
     state.browseMode = true;
     state.searchQuery = '';
+    state.searchResults = [];
     els.sidebarSearch.value = '';
     els.sidebarSearch.focus();
-    runUserSearch('');
+    renderSidebar();
+  }
+
+  async function refreshFriends() {
+    if (!state.me) return;
+    try {
+      const data = await api('/api/friends');
+      state.friends = data.friends || [];
+      state.friendRequestsSent = data.sent || [];
+      state.friendRequestsReceived = data.received || [];
+      for (const f of state.friends) {
+        if (f.online) state.onlineUsers.add(f.username);
+      }
+      if (state.activePeer) {
+        state.activePeer.relationship = getRelationshipForUser(state.activePeer.username);
+        if (state.infoOpen) renderInfoDrawer();
+      }
+      if (state.searchResults.length > 0) {
+        for (const u of state.searchResults) {
+          u.relationship = getRelationshipForUser(u.username);
+        }
+      }
+      renderSidebar();
+    } catch {
+      // Ignore transient errors
+    }
+  }
+
+  async function performFriendAction(action, targetUsername) {
+    const clean = String(targetUsername || '').trim().toLowerCase();
+    if (!clean) return;
+    try {
+      if (action === 'request') {
+        const res = await api('/api/friends/request', { method: 'POST', body: { targetUsername: clean } });
+        showToast(res.status === 'friends' ? `You and @${clean} are now friends!` : `Friend request sent to @${clean}`, 'success');
+      } else if (action === 'accept') {
+        await api('/api/friends/accept', { method: 'POST', body: { username: clean } });
+        showToast(`Accepted @${clean}'s friend request!`, 'success');
+      } else if (action === 'decline') {
+        await api('/api/friends/decline', { method: 'POST', body: { username: clean } });
+        showToast(`Declined @${clean}'s request.`);
+      } else if (action === 'cancel') {
+        await api('/api/friends/cancel', { method: 'POST', body: { username: clean } });
+        showToast(`Cancelled friend request to @${clean}.`);
+      } else if (action === 'unfriend') {
+        await api(`/api/friends/${encodeURIComponent(clean)}`, { method: 'DELETE' });
+        showToast(`Unfriended @${clean}.`);
+      }
+      await refreshFriends();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   }
 
   async function refreshChats() {
@@ -1438,7 +2041,7 @@
   // Active Chat & Messages
   // =========================================================================
   function updateChatHeaderStatus() {
-    if (!state.activeChatId || (!state.activePeer && !state.activeRoom)) return;
+    if (!state.activeChatId || (!state.activePeer && !state.activeRoom && (!state.activeChatMeta || state.activeChatMeta.type !== 'saved'))) return;
     const isTyping = state.typingPeers.has(state.activeChatId);
 
     els.chatPeerStatus.className = 'chat-peer-status';
@@ -1451,6 +2054,13 @@
           els.messagesViewport.scrollTop = els.messagesViewport.scrollHeight;
         });
       }
+    }
+
+    if (state.activeChatMeta && state.activeChatMeta.type === 'saved') {
+      els.chatPeerDot.classList.add('hidden');
+      els.chatPeerStatus.textContent = 'Personal cloud notes & files';
+      if (state.infoOpen) els.infoStatus.textContent = 'Personal Cloud';
+      return;
     }
 
     if (state.activeRoom) {
@@ -1484,33 +2094,84 @@
     }
   }
 
+  function updateComposerSendMicToggle() {
+    if (!els.sendBtn || !els.voiceRecBtn) return;
+    const hasText = Boolean(els.messageInput && els.messageInput.value.trim());
+    const hasFiles = Array.isArray(state.pendingFiles) && state.pendingFiles.length > 0;
+    const isEditing = Boolean(state.editingMessage);
+    const showSend = hasText || hasFiles || isEditing;
+    els.sendBtn.classList.toggle('hidden', !showSend);
+    els.voiceRecBtn.classList.toggle('hidden', showSend);
+  }
+
+  function renderPinnedBar() {
+    if (!els.pinnedMsgBar || !els.pinnedMsgPreview) return;
+    const p = state.pinnedMessage;
+    if (!p || !p.id) {
+      els.pinnedMsgBar.classList.add('hidden');
+      els.pinnedMsgPreview.textContent = '';
+      return;
+    }
+    const senderPrefix = p.sender ? `@${p.sender}: ` : '';
+    els.pinnedMsgPreview.textContent = `${senderPrefix}${p.text || 'Attachment'}`;
+    els.pinnedMsgBar.classList.remove('hidden');
+  }
+
   function syncComposerAccessForActiveChat() {
-    const composerRow = typeof document !== 'undefined' ? document.querySelector('.composer-row') : null;
+    const composerEl = typeof document !== 'undefined' ? document.querySelector('.composer') : null;
     const isChannel = state.activeRoom && state.activeRoom.type === 'channel';
+    const isSaved = state.activeChatMeta && state.activeChatMeta.type === 'saved';
     const isAdmin = isChannel && state.me && Array.isArray(state.activeRoom.admins) && state.activeRoom.admins.includes(state.me.username);
     const readOnly = Boolean(isChannel && !isAdmin);
+
+    const peer = state.activePeer;
+    const isDeletedPeer = Boolean(peer && peer.deleted);
+    const isBlockedByMe = Boolean(peer && peer.blockedByMe);
+    const isBlockedByPeer = Boolean(peer && peer.blockedByPeer);
+    const blockedDm = !isSaved && !state.activeRoom && (isDeletedPeer || isBlockedByMe || isBlockedByPeer);
 
     if (els.channelReadonlyBar) {
       els.channelReadonlyBar.classList.toggle('hidden', !readOnly);
     }
-    if (composerRow) {
-      composerRow.classList.toggle('hidden', readOnly);
+    if (els.dmBlockedBar) {
+      els.dmBlockedBar.classList.toggle('hidden', !blockedDm);
+      if (blockedDm && els.dmBlockedText) {
+        if (isDeletedPeer) els.dmBlockedText.textContent = 'This account has been deleted.';
+        else if (isBlockedByMe) els.dmBlockedText.textContent = 'You blocked this user.';
+        else els.dmBlockedText.textContent = 'You cannot send messages to this user.';
+      }
+      if (els.dmUnblockInlineBtn) {
+        els.dmUnblockInlineBtn.classList.toggle('hidden', !(isBlockedByMe && !isDeletedPeer));
+      }
     }
-    if (els.callAudioBtn) els.callAudioBtn.classList.toggle('hidden', Boolean(state.activeRoom));
-    if (els.callVideoBtn) els.callVideoBtn.classList.toggle('hidden', Boolean(state.activeRoom));
-    if (els.openGamesBtn) els.openGamesBtn.classList.toggle('hidden', readOnly);
+    if (composerEl) {
+      composerEl.classList.toggle('hidden', readOnly || blockedDm);
+    }
+    if (els.callAudioBtn) els.callAudioBtn.classList.toggle('hidden', Boolean(state.activeRoom || isSaved || blockedDm));
+    if (els.callVideoBtn) els.callVideoBtn.classList.toggle('hidden', Boolean(state.activeRoom || isSaved || blockedDm));
+    if (els.openGamesBtn) els.openGamesBtn.classList.toggle('hidden', readOnly || Boolean(isSaved || blockedDm));
+    updateComposerSendMicToggle();
   }
 
   async function applyOpenedChat(data) {
     const chat = data.chat;
+    const isSaved = chat.type === 'saved';
     const isRoom = chat.type === 'group' || chat.type === 'channel';
 
     state.activeChatId = chat.id;
-    state.activePeer = isRoom ? null : chat.peer;
+    state.activeChatMeta = chat;
+    state.activePeer = (isRoom || isSaved) ? null : chat.peer;
     state.activeRoom = isRoom ? chat : null;
+    state.pinnedMessage = chat.pinnedMessage || null;
     state.messages = data.messages || [];
     state.unreadBelowCount = 0;
     state.userScrolledSinceOpen = false;
+    state.editingMessage = null;
+    state.selectMode = false;
+    state.selectedMsgIds.clear();
+    if (els.editBanner) els.editBanner.classList.add('hidden');
+    if (els.multiSelectBar) els.multiSelectBar.classList.add('hidden');
+
     const firstUnread = state.me
       ? state.messages.find((m) => m.sender !== 'system' && m.sender !== state.me.username && (!Array.isArray(m.readBy) || !m.readBy.includes(state.me.username)))
       : null;
@@ -1540,15 +2201,25 @@
     autoResizeInput();
     requestAnimationFrame(() => autoResizeInput());
 
-    if (isRoom) {
+    if (isSaved) {
+      if (els.chatPeerAvatar) {
+        els.chatPeerAvatar.classList.add('saved-avatar');
+        els.chatPeerAvatar.style.background = 'var(--accent)';
+        els.chatPeerAvatar.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+      }
+      els.chatPeerName.textContent = 'Saved Messages';
+    } else if (isRoom) {
+      if (els.chatPeerAvatar) els.chatPeerAvatar.classList.remove('saved-avatar');
       renderAvatar(els.chatPeerAvatar, { displayName: chat.title, avatarColor: chat.avatarColor || 'var(--accent)' });
       els.chatPeerName.textContent = chat.title || 'Group';
     } else {
+      if (els.chatPeerAvatar) els.chatPeerAvatar.classList.remove('saved-avatar');
       renderAvatar(els.chatPeerAvatar, state.activePeer);
       els.chatPeerName.textContent = state.activePeer.displayName || state.activePeer.username;
     }
     syncComposerAccessForActiveChat();
     updateChatHeaderStatus();
+    renderPinnedBar();
 
     renderMessages(false);
     restoreChatScrollPosition(state.activeChatId);
@@ -1572,6 +2243,24 @@
       }
     } else if (!els.channelReadonlyBar || els.channelReadonlyBar.classList.contains('hidden')) {
       els.messageInput.focus();
+    }
+  }
+
+  async function openSavedMessages() {
+    try {
+      if (state.activeChatId) {
+        saveCurrentChatScroll();
+        if (els.messageInput) {
+          saveChatDraft(state.activeChatId, els.messageInput.value);
+        }
+      }
+      const data = await api('/api/chats/open', {
+        method: 'POST',
+        body: { type: 'saved' }
+      });
+      await applyOpenedChat(data);
+    } catch (err) {
+      showToast(err.message, 'error');
     }
   }
 
@@ -1640,6 +2329,15 @@
         return `<video class="msg-media-player" controls preload="metadata" src="${escapeHtml(att.url)}"></video>`;
       }
       if (att.mimeType && att.mimeType.startsWith('audio/')) {
+        const isVoice = /^voice-.*\.(webm|ogg|mp4|m4a|wav)$/i.test(String(att.originalName || ''));
+        if (isVoice) {
+          return `
+            <div class="voice-note-card">
+              <div class="voice-note-label">🎤 Voice message</div>
+              <audio class="msg-media-player" controls preload="metadata" src="${escapeHtml(att.url)}"></audio>
+            </div>
+          `;
+        }
         return `<audio class="msg-media-player" controls preload="metadata" src="${escapeHtml(att.url)}"></audio>`;
       }
       return `
@@ -1670,13 +2368,31 @@
     `;
   }
 
+  function renderLinkPreviewHtml(msg) {
+    const lp = msg && msg.linkPreview;
+    if (!lp || !lp.url || (!lp.title && !lp.description && !lp.image)) return '';
+    return `
+      <a class="msg-link-preview" href="${escapeHtml(lp.url)}" target="_blank" rel="noopener noreferrer">
+        <div class="msg-lp-body">
+          ${lp.siteName ? `<div class="msg-lp-site">${escapeHtml(lp.siteName)}</div>` : ''}
+          ${lp.title ? `<div class="msg-lp-title">${escapeHtml(lp.title)}</div>` : ''}
+          ${lp.description ? `<div class="msg-lp-desc">${escapeHtml(lp.description)}</div>` : ''}
+        </div>
+        ${lp.image ? `<img class="msg-lp-thumb" src="${escapeHtml(lp.image)}" alt="" loading="lazy" />` : ''}
+      </a>
+    `;
+  }
+
   function renderMessages(scrollToBottom = false) {
     const msgs = state.messages;
-    const roomTitle = state.activeRoom ? (state.activeRoom.title || 'this room') : (state.activePeer ? (state.activePeer.displayName || state.activePeer.username) : 'this chat');
+    const isSaved = state.activeChatMeta && state.activeChatMeta.type === 'saved';
+    const roomTitle = isSaved
+      ? 'Saved Messages'
+      : (state.activeRoom ? (state.activeRoom.title || 'this room') : (state.activePeer ? (state.activePeer.displayName || state.activePeer.username) : 'this chat'));
     if (msgs.length === 0) {
-      els.messagesList.innerHTML = `
-        <div class="date-separator">No messages yet — say hi to ${escapeHtml(roomTitle)}! 👋</div>
-      `;
+      els.messagesList.innerHTML = isSaved
+        ? `<div class="date-separator">Save notes, links, and files here to access them anywhere! 📌</div>`
+        : `<div class="date-separator">No messages yet — say hi to ${escapeHtml(roomTitle)}! 👋</div>`;
       return;
     }
 
@@ -1768,16 +2484,30 @@
         }
       }
 
+      const isSelected = state.selectMode && state.selectedMsgIds.has(msg.id);
+      const fwdHeaderHtml = msg.forwardedFrom && msg.forwardedFrom.sender
+        ? `<div class="msg-forwarded-header">↪ Forwarded from @${escapeHtml(msg.forwardedFrom.sender)}</div>`
+        : '';
+      const editedBadgeHtml = msg.editedAt
+        ? `<span class="msg-edited-badge" title="Edited ${escapeHtml(formatTime(msg.editedAt))}">edited</span>`
+        : '';
+      const selectCheckHtml = state.selectMode
+        ? `<span class="msg-select-check">${isSelected ? '✓' : ''}</span>`
+        : '';
+
       const bubbleHtml = `
         <div class="msg-bubble">
+          ${fwdHeaderHtml}
           ${senderHeaderHtml}
           ${replyHtml}
           ${renderAttachmentsHtml(msg)}
           ${gameCardHtml}
           ${callCardHtml}
           ${msg.text && msg.kind !== 'game' && msg.kind !== 'call' ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
+          ${renderLinkPreviewHtml(msg)}
           ${renderReactionsHtml(msg)}
           <div class="msg-footer">
+            ${editedBadgeHtml}
             <span>${escapeHtml(formatTime(msg.createdAt))}</span>
             ${ticksHtml}
           </div>
@@ -1785,7 +2515,8 @@
       `;
 
       htmlParts.push(`
-        <div class="msg-row ${groupClasses}" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">
+        <div class="msg-row ${groupClasses}${state.selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">
+          ${selectCheckHtml}
           ${isMine ? actionsHtml + bubbleHtml : bubbleHtml + actionsHtml}
         </div>
       `);
@@ -1851,6 +2582,7 @@
     if (state.pendingFiles.length === 0) {
       els.pendingFilesBar.classList.add('hidden');
       els.pendingFilesBar.innerHTML = '';
+      updateComposerSendMicToggle();
       return;
     }
     els.pendingFilesBar.classList.remove('hidden');
@@ -1866,6 +2598,7 @@
         <button class="icon-btn-sm" type="button" data-remove-file="${idx}" aria-label="Remove file">✕</button>
       </div>
     `).join('');
+    updateComposerSendMicToggle();
   }
 
   function sendWithProgress(url, formData) {
@@ -1899,10 +2632,66 @@
     });
   }
 
+  function startEditMessage(msgId) {
+    const msg = state.messages.find((m) => m.id === msgId);
+    if (!msg || !state.me || msg.sender !== state.me.username) return;
+    if (msg.kind === 'game' || msg.kind === 'call') return;
+    clearReply();
+    clearPendingFiles();
+    state.editingMessage = msg;
+    if (els.editBannerText) els.editBannerText.textContent = msg.text || '';
+    if (els.editBanner) els.editBanner.classList.remove('hidden');
+    els.messageInput.value = msg.text || '';
+    autoResizeInput();
+    updateComposerSendMicToggle();
+    els.messageInput.focus();
+  }
+
+  function cancelEditMode(clearInput = true) {
+    state.editingMessage = null;
+    if (els.editBanner) els.editBanner.classList.add('hidden');
+    if (clearInput && els.messageInput) {
+      els.messageInput.value = '';
+      if (state.activeChatId) saveChatDraft(state.activeChatId, '');
+      autoResizeInput();
+    }
+    updateComposerSendMicToggle();
+  }
+
   async function sendMessage() {
     if (!state.activeChatId || state.sending) return;
     const rawValue = els.messageInput.value;
     const text = rawValue.trim();
+
+    // Edit existing message flow
+    if (state.editingMessage) {
+      if (!text) {
+        showToast('Edited message cannot be empty.', 'error');
+        return;
+      }
+      const targetMsgId = state.editingMessage.id;
+      const chatId = state.activeChatId;
+      state.sending = true;
+      try {
+        const data = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(targetMsgId)}`, {
+          method: 'PATCH',
+          body: { text }
+        });
+        cancelEditMode(true);
+        if (data.message) {
+          const idx = state.messages.findIndex((m) => m.id === data.message.id);
+          if (idx >= 0) state.messages[idx] = data.message;
+          renderMessages(false);
+        }
+        await refreshChats();
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        state.sending = false;
+      }
+      return;
+    }
+
     const hasFiles = state.pendingFiles.length > 0;
     if (!text && !hasFiles) return;
 
@@ -1915,6 +2704,7 @@
     els.messageInput.value = '';
     saveChatDraft(chatId, '');
     autoResizeInput();
+    updateComposerSendMicToggle();
     if (wasInputFocused && document.activeElement !== els.messageInput) {
       els.messageInput.focus({ preventScroll: true });
     }
@@ -1991,6 +2781,418 @@
     els.replyBanner.classList.add('hidden');
   }
 
+  async function togglePinMessage(msgId, unpin = false) {
+    if (!state.activeChatId) return;
+    try {
+      const data = await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/pin`, {
+        method: 'POST',
+        body: { messageId: unpin ? null : msgId, unpin: Boolean(unpin) }
+      });
+      state.pinnedMessage = data.pinnedMessage || null;
+      if (state.activeChatMeta) state.activeChatMeta.pinnedMessage = state.pinnedMessage;
+      renderPinnedBar();
+      showToast(state.pinnedMessage ? 'Message pinned to top' : 'Message unpinned', 'success');
+      await refreshChats();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function updateChatPrefs(chatId, prefs) {
+    if (!chatId) return;
+    try {
+      const res = await api(`/api/chats/${encodeURIComponent(chatId)}/prefs`, {
+        method: 'POST',
+        body: prefs
+      });
+      if (chatId === state.activeChatId && state.activeChatMeta) {
+        state.activeChatMeta.isPinned = Boolean(res.isPinned);
+        state.activeChatMeta.isMuted = Boolean(res.isMuted);
+      }
+      const c = state.chats.find((x) => x.id === chatId);
+      if (c) {
+        c.isPinned = Boolean(res.isPinned);
+        c.isMuted = Boolean(res.isMuted);
+      }
+      if (state.infoOpen) renderInfoDrawer();
+      await refreshChats();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  function renderMultiSelectBar() {
+    if (!els.multiSelectBar) return;
+    if (!state.selectMode) {
+      els.multiSelectBar.classList.add('hidden');
+      return;
+    }
+    const count = state.selectedMsgIds.size;
+    els.multiSelectBar.classList.remove('hidden');
+    if (els.multiSelectCount) {
+      els.multiSelectCount.textContent = `${count} selected`;
+    }
+    const hasSelection = count > 0;
+    if (els.multiCopyBtn) els.multiCopyBtn.disabled = !hasSelection;
+    if (els.multiForwardBtn) els.multiForwardBtn.disabled = !hasSelection;
+    if (els.multiDeleteBtn) els.multiDeleteBtn.disabled = !hasSelection;
+  }
+
+  function renderChatSelectBar() {
+    if (!els.chatSelectBar) return;
+    if (!state.chatSelectMode) {
+      els.chatSelectBar.classList.add('hidden');
+      return;
+    }
+    const selected = state.chats.filter((c) => state.selectedChatIds.has(c.id));
+    const count = selected.length;
+    els.chatSelectBar.classList.remove('hidden');
+    if (els.chatSelectCount) {
+      els.chatSelectCount.textContent = `${count} selected`;
+    }
+    const toggleable = selected.filter((c) => c.type !== 'saved');
+    const allMuted = toggleable.length > 0 && toggleable.every((c) => c.isMuted);
+    const allPinned = toggleable.length > 0 && toggleable.every((c) => c.isPinned);
+    if (els.chatSelPinBtn) {
+      els.chatSelPinBtn.disabled = toggleable.length === 0;
+      els.chatSelPinBtn.textContent = allPinned ? '📌 Unpin' : '📌 Pin';
+      els.chatSelPinBtn.dataset.nextPinned = allPinned ? '0' : '1';
+    }
+    if (els.chatSelMuteBtn) {
+      els.chatSelMuteBtn.disabled = toggleable.length === 0;
+      els.chatSelMuteBtn.textContent = allMuted ? '🔔 Unmute' : '🔇 Mute';
+      els.chatSelMuteBtn.dataset.nextMuted = allMuted ? '0' : '1';
+    }
+    if (els.chatSelDeleteBtn) {
+      els.chatSelDeleteBtn.disabled = count === 0;
+    }
+  }
+
+  function enterChatSelectMode(initialChatId) {
+    state.chatSelectMode = true;
+    state.selectedChatIds = new Set(initialChatId ? [initialChatId] : []);
+    renderChatSelectBar();
+    renderSidebar();
+  }
+
+  function exitChatSelectMode() {
+    if (!state.chatSelectMode && state.selectedChatIds.size === 0) return;
+    state.chatSelectMode = false;
+    state.selectedChatIds.clear();
+    renderChatSelectBar();
+    renderSidebar();
+  }
+
+  function toggleChatSelected(chatId) {
+    if (!state.chatSelectMode || !chatId) return;
+    if (state.selectedChatIds.has(chatId)) state.selectedChatIds.delete(chatId);
+    else state.selectedChatIds.add(chatId);
+    const row = els.sidebarList ? els.sidebarList.querySelector(`.chat-row[data-chat-id="${CSS && CSS.escape ? CSS.escape(chatId) : chatId}"]`) : null;
+    if (row) {
+      const sel = state.selectedChatIds.has(chatId);
+      row.classList.toggle('selected', sel);
+      const chk = row.querySelector('.chat-select-check');
+      if (chk) chk.textContent = sel ? '✓' : '';
+    }
+    renderChatSelectBar();
+  }
+
+  function closeDeleteConfirmModal() {
+    state.deleteConfirmState = null;
+    if (els.deleteConfirmModal) els.deleteConfirmModal.classList.add('hidden');
+  }
+
+  function openDeleteConfirmForMessages(msgIds) {
+    if (!state.activeChatId || !Array.isArray(msgIds) || msgIds.length === 0) return;
+    const idSet = new Set(msgIds);
+    const targets = state.messages.filter((m) => idSet.has(m.id));
+    if (targets.length === 0) return;
+
+    const isSaved = state.activeChatMeta && state.activeChatMeta.type === 'saved';
+    const isChannelAdmin = state.activeRoom && state.activeRoom.type === 'channel' && state.me && Array.isArray(state.activeRoom.admins) && state.activeRoom.admins.includes(state.me.username);
+    const ownCount = targets.filter((m) => state.me && (m.sender === state.me.username || isChannelAdmin)).length;
+    const allowForEveryone = !isSaved && ownCount > 0;
+    const peerLabel = state.activePeer
+      ? (state.activePeer.displayName || `@${state.activePeer.username}`)
+      : (state.activeRoom ? 'everyone' : 'the other user');
+
+    state.deleteConfirmState = {
+      mode: 'messages',
+      chatId: state.activeChatId,
+      msgIds: targets.map((m) => m.id),
+      allowForEveryone
+    };
+
+    if (!els.deleteConfirmModal) {
+      // Fallback for minimal mock test environments
+      executeDeleteMessages(state.activeChatId, targets.map((m) => m.id), false);
+      return;
+    }
+
+    els.deleteConfirmTitle.textContent = targets.length === 1 ? 'Delete Message?' : `Delete ${targets.length} Messages?`;
+    els.deleteConfirmDesc.textContent = allowForEveryone
+      ? `Choose whether to delete ${targets.length === 1 ? 'this message' : `these ${targets.length} messages`} only for you or also for ${peerLabel}.`
+      : `Remove ${targets.length === 1 ? 'this message' : `these ${targets.length} messages`} from your chat view?`;
+
+    if (els.deleteEveryoneRow && els.deleteEveryoneCheckbox && els.deleteEveryoneLabel) {
+      els.deleteEveryoneRow.classList.toggle('hidden', !allowForEveryone);
+      els.deleteEveryoneCheckbox.checked = false;
+      if (allowForEveryone) {
+        if (state.activePeer && ownCount < targets.length) {
+          els.deleteEveryoneLabel.textContent = `Also delete my ${ownCount} message(s) for ${peerLabel}`;
+        } else {
+          els.deleteEveryoneLabel.textContent = `Also delete for ${peerLabel}`;
+        }
+      }
+    }
+    els.deleteConfirmModal.classList.remove('hidden');
+  }
+
+  function openDeleteConfirmForChats(chatIds) {
+    if (!Array.isArray(chatIds) || chatIds.length === 0) return;
+    const targets = state.chats.filter((c) => chatIds.includes(c.id));
+    if (targets.length === 0) return;
+
+    const dmTargets = targets.filter((c) => !c.type || c.type === 'dm');
+    const adminRoomTargets = targets.filter((c) => (c.type === 'group' || c.type === 'channel') && state.me && (c.createdBy === state.me.username || (Array.isArray(c.admins) && c.admins.includes(state.me.username))));
+    const allowForEveryone = dmTargets.length > 0 || adminRoomTargets.length > 0;
+
+    let label = 'Also delete for the other user(s) too';
+    if (targets.length === 1 && dmTargets.length === 1) {
+      const peer = dmTargets[0].peer;
+      const peerName = peer ? (peer.displayName || `@${peer.username}`) : 'other user';
+      label = `Also delete chat for ${peerName}`;
+    } else if (dmTargets.length === 0 && adminRoomTargets.length > 0) {
+      label = 'Delete room for all members';
+    }
+
+    const singleTitle = targets[0].type === 'saved'
+      ? 'Saved Messages'
+      : (targets[0].title || (targets[0].peer ? (targets[0].peer.displayName || targets[0].peer.username) : 'this chat'));
+
+    state.deleteConfirmState = {
+      mode: 'chats',
+      chatIds: targets.map((c) => c.id),
+      allowForEveryone
+    };
+
+    if (!els.deleteConfirmModal) return;
+    els.deleteConfirmTitle.textContent = targets.length === 1 ? `Delete "${singleTitle}"?` : `Delete ${targets.length} Chats?`;
+    els.deleteConfirmDesc.textContent = targets.length === 1
+      ? 'This will remove the chat and clear its messages from your device.'
+      : `This will remove ${targets.length} selected chats and clear their history from your device.`;
+
+    if (els.deleteEveryoneRow && els.deleteEveryoneCheckbox && els.deleteEveryoneLabel) {
+      els.deleteEveryoneRow.classList.toggle('hidden', !allowForEveryone);
+      els.deleteEveryoneCheckbox.checked = false;
+      els.deleteEveryoneLabel.textContent = label;
+    }
+    els.deleteConfirmModal.classList.remove('hidden');
+  }
+
+  async function executeDeleteMessages(chatId, msgIds, forEveryone) {
+    if (!chatId || !Array.isArray(msgIds) || msgIds.length === 0) return;
+    try {
+      if (msgIds.length === 1) {
+        await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgIds[0])}?forEveryone=${forEveryone ? '1' : '0'}`, {
+          method: 'DELETE'
+        });
+      } else {
+        await api(`/api/chats/${encodeURIComponent(chatId)}/messages/bulk-delete`, {
+          method: 'POST',
+          body: { messageIds: msgIds, forEveryone: Boolean(forEveryone) }
+        });
+      }
+      if (state.activeChatId === chatId) {
+        const delSet = new Set(msgIds);
+        state.messages = state.messages.filter((m) => !delSet.has(m.id));
+        renderMessages(false);
+        if (state.infoOpen) renderInfoDrawer();
+      }
+      exitSelectMode();
+      await refreshChats();
+      showToast(
+        msgIds.length === 1 ? 'Message deleted' : `Deleted ${msgIds.length} messages`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function executeDeleteChats(chatIds, forEveryone) {
+    if (!Array.isArray(chatIds) || chatIds.length === 0) return;
+    try {
+      const res = await api('/api/chats/bulk-delete', {
+        method: 'POST',
+        body: { chatIds, forEveryone: Boolean(forEveryone) }
+      });
+      const deletedSet = new Set(res.deletedChatIds || chatIds);
+      state.chats = state.chats.filter((c) => !deletedSet.has(c.id));
+      if (state.activeChatId && deletedSet.has(state.activeChatId)) {
+        state.activeChatId = null;
+        state.activeChatMeta = null;
+        state.activePeer = null;
+        state.activeRoom = null;
+        state.pinnedMessage = null;
+        state.messages = [];
+        els.activeChat.classList.add('hidden');
+        els.chatEmptyState.classList.remove('hidden');
+        els.appShell.classList.remove('mobile-chat-open');
+      }
+      exitChatSelectMode();
+      await refreshChats();
+      showToast(
+        deletedSet.size === 1 ? 'Chat deleted' : `Deleted ${deletedSet.size} chats`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function submitDeleteConfirmModal() {
+    const info = state.deleteConfirmState;
+    if (!info) return;
+    const forEveryone = Boolean(info.allowForEveryone && els.deleteEveryoneCheckbox && els.deleteEveryoneCheckbox.checked);
+    closeDeleteConfirmModal();
+    if (info.mode === 'messages') {
+      await executeDeleteMessages(info.chatId, info.msgIds, forEveryone);
+    } else if (info.mode === 'chats') {
+      await executeDeleteChats(info.chatIds, forEveryone);
+    }
+  }
+
+  function enterSelectMode(initialMsgId) {
+    state.selectMode = true;
+    state.selectedMsgIds = new Set(initialMsgId ? [initialMsgId] : []);
+    renderMultiSelectBar();
+    renderMessages(false);
+  }
+
+  function exitSelectMode() {
+    if (!state.selectMode && state.selectedMsgIds.size === 0) return;
+    state.selectMode = false;
+    state.selectedMsgIds.clear();
+    renderMultiSelectBar();
+    renderMessages(false);
+  }
+
+  function toggleMessageSelected(msgId) {
+    if (!state.selectMode) return;
+    if (state.selectedMsgIds.has(msgId)) state.selectedMsgIds.delete(msgId);
+    else state.selectedMsgIds.add(msgId);
+    const row = $(`msg-${msgId}`);
+    if (row) {
+      const sel = state.selectedMsgIds.has(msgId);
+      row.classList.toggle('selected', sel);
+      const chk = row.querySelector('.msg-select-check');
+      if (chk) chk.textContent = sel ? '✓' : '';
+    }
+    renderMultiSelectBar();
+  }
+
+  async function multiCopySelected() {
+    if (state.selectedMsgIds.size === 0) return;
+    const ordered = state.messages.filter((m) => state.selectedMsgIds.has(m.id));
+    const lines = ordered
+      .map((m) => (m.text ? m.text : (m.attachments && m.attachments[0] ? m.attachments[0].originalName : '')))
+      .filter(Boolean);
+    if (lines.length === 0) {
+      showToast('No text in selected messages.', 'error');
+      return;
+    }
+    const payload = lines.join('\n\n');
+    try {
+      if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(payload);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = payload;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      showToast(`Copied ${lines.length} message${lines.length === 1 ? '' : 's'}`, 'success');
+      exitSelectMode();
+    } catch {
+      showToast('Failed to copy messages.', 'error');
+    }
+  }
+
+  async function multiDeleteSelected() {
+    if (!state.activeChatId || state.selectedMsgIds.size === 0) return;
+    openDeleteConfirmForMessages(Array.from(state.selectedMsgIds));
+  }
+
+  function openForwardModal(msgIds) {
+    if (!els.forwardModal || !els.forwardTargetsList || !Array.isArray(msgIds) || msgIds.length === 0) return;
+    state.forwardMsgIds = msgIds.slice();
+    const seenIds = new Set();
+    const targets = [];
+    targets.push({
+      targetId: 'saved',
+      title: 'Saved Messages',
+      subtitle: 'Personal cloud notes & files',
+      isSaved: true
+    });
+    const mySavedId = state.me ? `saved_${state.me.username}` : '';
+    seenIds.add(mySavedId);
+
+    for (const c of state.chats) {
+      if (!c || !c.id || seenIds.has(c.id)) continue;
+      if (c.type === 'channel' && state.me && Array.isArray(c.admins) && !c.admins.includes(state.me.username)) continue;
+      seenIds.add(c.id);
+      const isRoom = c.type === 'group' || c.type === 'channel';
+      const peer = c.peer;
+      targets.push({
+        targetId: c.id,
+        title: isRoom ? (c.title || 'Group') : ((peer && (peer.displayName || peer.username)) || c.id),
+        subtitle: isRoom ? (c.type === 'channel' ? 'Channel' : 'Group') : (peer ? `@${peer.username}` : ''),
+        avatarSeed: isRoom ? { displayName: c.title, avatarColor: c.avatarColor } : peer
+      });
+    }
+
+    if (state.me && Array.isArray(state.friends)) {
+      for (const f of state.friends) {
+        if (!f || !f.username) continue;
+        const dmId = `dm_${[state.me.username, f.username].sort().join('__')}`;
+        if (seenIds.has(dmId)) continue;
+        seenIds.add(dmId);
+        targets.push({
+          targetId: dmId,
+          title: f.displayName || f.username,
+          subtitle: `@${f.username}`,
+          avatarSeed: f
+        });
+      }
+    }
+
+    els.forwardTargetsList.innerHTML = targets.map((t) => `
+      <button type="button" class="forward-target-row" data-forward-target="${escapeHtml(t.targetId)}">
+        <div class="avatar${t.isSaved ? ' saved-avatar' : ''}" style="background: ${escapeHtml((t.avatarSeed && t.avatarSeed.avatarColor) || 'var(--accent)')}">
+          ${t.isSaved
+            ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>'
+            : (t.avatarSeed && t.avatarSeed.avatarUrl ? `<img src="${escapeHtml(t.avatarSeed.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(t.avatarSeed || { displayName: t.title })))}
+        </div>
+        <div class="forward-target-meta">
+          <div class="forward-target-name">${escapeHtml(t.title)}</div>
+          <div class="forward-target-sub">${escapeHtml(t.subtitle || '')}</div>
+        </div>
+        <span class="forward-send-arrow">↪</span>
+      </button>
+    `).join('');
+    els.forwardModal.classList.remove('hidden');
+  }
+
+  function closeForwardModal() {
+    state.forwardMsgIds = [];
+    if (els.forwardModal) els.forwardModal.classList.add('hidden');
+  }
+
   let lastTypingSentAt = 0;
   let typingStopTimer = null;
   function sendTypingSignal(isTyping) {
@@ -2020,11 +3222,61 @@
   // Info Drawer (Profile & Shared Media / Files)
   // =========================================================================
   function renderInfoDrawer() {
-    if (!state.activePeer && !state.activeRoom) return;
-    if (state.activeRoom) {
+    const isSaved = state.activeChatMeta && state.activeChatMeta.type === 'saved';
+    if (!state.activePeer && !state.activeRoom && !isSaved) return;
+
+    if (els.infoChatPrefs && state.activeChatId) {
+      if (isSaved) {
+        els.infoChatPrefs.classList.add('hidden');
+      } else {
+        const chatObj = state.chats.find((c) => c.id === state.activeChatId) || state.activeChatMeta || {};
+        const isPinnedChat = Boolean(chatObj.isPinned);
+        const isMutedChat = Boolean(chatObj.isMuted);
+        els.infoChatPrefs.classList.remove('hidden');
+        if (els.infoPinChatBtn) {
+          els.infoPinChatBtn.textContent = isPinnedChat ? '📌 Unpin Chat' : '📌 Pin Chat';
+          els.infoPinChatBtn.classList.toggle('active', isPinnedChat);
+        }
+        if (els.infoMuteChatBtn) {
+          els.infoMuteChatBtn.classList.remove('hidden');
+          els.infoMuteChatBtn.textContent = isMutedChat ? '🔔 Unmute' : '🔇 Mute';
+          els.infoMuteChatBtn.classList.toggle('active', isMutedChat);
+        }
+      }
+    }
+
+    if (isSaved) {
+      if (els.infoHeaderTitle) els.infoHeaderTitle.textContent = 'Saved Messages';
+      if (els.infoFriendControls) {
+        els.infoFriendControls.classList.add('hidden');
+        els.infoFriendControls.innerHTML = '';
+      }
+      if (els.infoSafetyControls) els.infoSafetyControls.classList.add('hidden');
+      if (els.infoRoomControls) {
+        els.infoRoomControls.classList.add('hidden');
+        els.infoRoomControls.innerHTML = '';
+      }
+      if (els.infoAvatar) {
+        els.infoAvatar.classList.add('saved-avatar');
+        els.infoAvatar.style.background = 'var(--accent)';
+        els.infoAvatar.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+      }
+      els.infoDisplayName.textContent = 'Saved Messages';
+      els.infoUsername.textContent = state.me ? `@${state.me.username}` : 'Personal Cloud';
+      els.infoStatus.textContent = 'Notes, links & files';
+      if (els.infoEmailRow) els.infoEmailRow.classList.add('hidden');
+      if (els.infoBioRow) els.infoBioRow.classList.add('hidden');
+      if (els.infoBirthdayRow) els.infoBirthdayRow.classList.add('hidden');
+    } else if (state.activeRoom) {
+      if (els.infoAvatar) els.infoAvatar.classList.remove('saved-avatar');
+      if (els.infoSafetyControls) els.infoSafetyControls.classList.add('hidden');
       const r = state.activeRoom;
       if (els.infoHeaderTitle) {
         els.infoHeaderTitle.textContent = r.type === 'channel' ? 'Channel Info' : 'Group Info';
+      }
+      if (els.infoFriendControls) {
+        els.infoFriendControls.classList.add('hidden');
+        els.infoFriendControls.innerHTML = '';
       }
       renderAvatar(els.infoAvatar, { displayName: r.title, avatarColor: r.avatarColor || 'var(--accent)' });
       els.infoDisplayName.textContent = r.title || 'Room';
@@ -2046,19 +3298,27 @@
         }
       }
     } else {
+      if (els.infoAvatar) els.infoAvatar.classList.remove('saved-avatar');
       const p = state.activePeer;
       if (els.infoHeaderTitle) els.infoHeaderTitle.textContent = 'User Info';
       if (els.infoRoomControls) {
         els.infoRoomControls.classList.add('hidden');
         els.infoRoomControls.innerHTML = '';
       }
-      if (els.infoEmailRow) els.infoEmailRow.classList.remove('hidden');
+      if (els.infoEmailRow) {
+        if (p.email) {
+          els.infoEmailRow.classList.remove('hidden');
+          els.infoEmail.textContent = p.email;
+        } else {
+          els.infoEmailRow.classList.add('hidden');
+          els.infoEmail.textContent = '';
+        }
+      }
       renderAvatar(els.infoAvatar, p);
       els.infoDisplayName.textContent = p.displayName || p.username;
       els.infoUsername.textContent = `@${p.username}`;
-      els.infoEmail.textContent = p.email;
       const isOnline = state.onlineUsers.has(p.username) || p.online;
-      els.infoStatus.textContent = isOnline ? 'online' : formatLastSeen(p.lastSeen);
+      els.infoStatus.textContent = p.deleted ? 'deleted account' : (isOnline ? 'online' : formatLastSeen(p.lastSeen));
       if (p.bio) {
         els.infoBioRow.classList.remove('hidden');
         els.infoBio.textContent = p.bio;
@@ -2074,6 +3334,46 @@
           els.infoBirthday.classList.toggle('birthday-today', bdayInfo.isToday);
         } else {
           els.infoBirthdayRow.classList.add('hidden');
+        }
+      }
+
+      if (els.infoFriendControls) {
+        const rel = getRelationshipForUser(p.username) !== 'none'
+          ? getRelationshipForUser(p.username)
+          : (p.relationship || 'none');
+        els.infoFriendControls.classList.remove('hidden');
+        const u = escapeHtml(p.username);
+        if (rel === 'friends') {
+          els.infoFriendControls.innerHTML = `
+            <span class="friend-status-pill">✓ Friends</span>
+            <button type="button" class="danger-btn sm" data-friend-action="unfriend" data-friend-user="${u}">Unfriend</button>
+          `;
+        } else if (rel === 'outgoing_pending') {
+          els.infoFriendControls.innerHTML = `
+            <span class="friend-status-pill pending">Request Sent</span>
+            <button type="button" class="secondary-btn sm" data-friend-action="cancel" data-friend-user="${u}">Cancel Request</button>
+          `;
+        } else if (rel === 'incoming_pending') {
+          els.infoFriendControls.innerHTML = `
+            <button type="button" class="primary-btn sm" data-friend-action="accept" data-friend-user="${u}">Accept Friend</button>
+            <button type="button" class="secondary-btn sm" data-friend-action="decline" data-friend-user="${u}">Decline</button>
+          `;
+        } else {
+          els.infoFriendControls.innerHTML = `
+            <button type="button" class="primary-btn sm full-width" data-friend-action="request" data-friend-user="${u}">+ Add Friend</button>
+          `;
+        }
+      }
+      if (els.infoSafetyControls) {
+        if (p.deleted) {
+          els.infoSafetyControls.classList.add('hidden');
+        } else {
+          els.infoSafetyControls.classList.remove('hidden');
+          if (els.infoBlockBtn) {
+            els.infoBlockBtn.textContent = p.blockedByMe ? '🔓 Unblock User' : '🚫 Block User';
+            els.infoBlockBtn.classList.toggle('danger-btn', !p.blockedByMe);
+            els.infoBlockBtn.classList.toggle('secondary-btn', Boolean(p.blockedByMe));
+          }
         }
       }
     }
@@ -2286,7 +3586,36 @@
           }
         }
         if (isIncoming) {
+          const activeChatObj = state.chats.find((c) => c.id === data.chatId) || state.activeChatMeta;
+          const isMutedChat = Boolean(activeChatObj && activeChatObj.isMuted);
+          if (!isMutedChat) {
+            playChime('receive');
+            notifyIncomingMessage({
+              chatId: data.chatId,
+              messageId: data.message.id,
+              senderUsername: data.message.sender,
+              senderName,
+              senderAvatarUrl,
+              senderAvatarColor,
+              bodyText: bodyPreview
+            });
+          }
+          if (wasNearBottom) {
+            await markActiveChatRead();
+          } else {
+            updateGlobalUnreadCounters();
+          }
+        }
+      } else if (isIncoming) {
+        const existingChat = state.chats.find((c) => c.id === data.chatId);
+        const isMutedChat = Boolean(existingChat && existingChat.isMuted);
+        if (existingChat) {
+          existingChat.unreadCount = Number(existingChat.unreadCount || 0) + 1;
+          renderSidebar();
+        }
+        if (!isMutedChat) {
           playChime('receive');
+          showToast(`${senderName}: ${bodyPreview.slice(0, 60)}`);
           notifyIncomingMessage({
             chatId: data.chatId,
             messageId: data.message.id,
@@ -2296,29 +3625,7 @@
             senderAvatarColor,
             bodyText: bodyPreview
           });
-          if (wasNearBottom) {
-            await markActiveChatRead();
-          } else {
-            updateGlobalUnreadCounters();
-          }
         }
-      } else if (isIncoming) {
-        const existingChat = state.chats.find((c) => c.id === data.chatId);
-        if (existingChat) {
-          existingChat.unreadCount = Number(existingChat.unreadCount || 0) + 1;
-          renderSidebar();
-        }
-        playChime('receive');
-        showToast(`${senderName}: ${bodyPreview.slice(0, 60)}`);
-        notifyIncomingMessage({
-          chatId: data.chatId,
-          messageId: data.message.id,
-          senderUsername: data.message.sender,
-          senderName,
-          senderAvatarUrl,
-          senderAvatarColor,
-          bodyText: bodyPreview
-        });
       }
 
       if (state.typingPeers.has(data.chatId)) {
@@ -2369,6 +3676,74 @@
       await refreshChats();
     });
 
+    es.addEventListener('chat_pinned', async (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.chatId === state.activeChatId) {
+        state.pinnedMessage = data.pinnedMessage || null;
+        if (state.activeChatMeta) state.activeChatMeta.pinnedMessage = state.pinnedMessage;
+        renderPinnedBar();
+      }
+      await refreshChats();
+    });
+
+    es.addEventListener('chat_prefs_updated', async (ev) => {
+      const data = JSON.parse(ev.data);
+      if (data.chatId === state.activeChatId && state.activeChatMeta) {
+        state.activeChatMeta.isPinned = Boolean(data.isPinned);
+        state.activeChatMeta.isMuted = Boolean(data.isMuted);
+        if (state.infoOpen) renderInfoDrawer();
+      }
+      await refreshChats();
+    });
+
+    es.addEventListener('chat_deleted', async (ev) => {
+      const data = JSON.parse(ev.data);
+      const chatId = data && data.chatId;
+      if (!chatId) return;
+      state.chats = state.chats.filter((c) => c.id !== chatId);
+      state.selectedChatIds.delete(chatId);
+      if (state.activeChatId === chatId) {
+        state.activeChatId = null;
+        state.activeChatMeta = null;
+        state.activePeer = null;
+        state.activeRoom = null;
+        state.pinnedMessage = null;
+        state.messages = [];
+        els.activeChat.classList.add('hidden');
+        els.chatEmptyState.classList.remove('hidden');
+        els.appShell.classList.remove('mobile-chat-open');
+        if (data.by && (!state.me || data.by !== state.me.username)) {
+          showToast('This chat was deleted.', 'info');
+        }
+      }
+      renderChatSelectBar();
+      renderSidebar();
+      await refreshChats();
+    });
+
+    es.addEventListener('block_updated', async (ev) => {
+      const data = JSON.parse(ev.data);
+      if (state.activePeer && (state.activePeer.username === data.by || state.activePeer.username === data.target)) {
+        await openChatWithUser(state.activePeer.username);
+      }
+      await refreshBlockedUsers();
+      await refreshChats();
+    });
+
+    es.addEventListener('account_deleted', () => {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
+      }
+      state.me = null;
+      state.chats = [];
+      state.activeChatId = null;
+      els.activeChat.classList.add('hidden');
+      els.chatEmptyState.classList.remove('hidden');
+      closeSettingsModal();
+      showAuthScreen();
+    });
+
     es.addEventListener('chat_updated', async (ev) => {
       const data = JSON.parse(ev.data);
       if (data.chat && data.chatId) {
@@ -2404,6 +3779,20 @@
         toggleInfoDrawer(false);
       }
       renderSidebar();
+    });
+
+    es.addEventListener('friends_updated', async (ev) => {
+      try {
+        const data = JSON.parse(ev.data || '{}');
+        if (state.me && data.to === state.me.username && data.status === 'outgoing_pending') {
+          showToast(`@${data.from} sent you a friend request!`, 'success');
+        } else if (state.me && data.by && data.friend === state.me.username && data.status === 'friends') {
+          showToast(`@${data.by} accepted your friend request!`, 'success');
+        }
+      } catch {
+        // Ignore
+      }
+      await refreshFriends();
     });
 
     const forwardFeatureEvents = [
@@ -2442,10 +3831,14 @@
         updateChatHeaderStatus();
         if (state.infoOpen) renderInfoDrawer();
       }
-      if (renamedUser && Array.isArray(data.chatRenames) && state.activeChatId) {
-        const hit = data.chatRenames.find((r) => r.oldChatId === state.activeChatId);
-        if (hit && state.activePeer) {
-          await openChatWithUser(state.activePeer.username);
+      if (renamedUser && state.activeChatId) {
+        if (state.activeChatId.startsWith('saved_') && state.me && state.me.username === updated.username) {
+          await openSavedMessages();
+        } else if (Array.isArray(data.chatRenames)) {
+          const hit = data.chatRenames.find((r) => r.oldChatId === state.activeChatId);
+          if (hit && state.activePeer) {
+            await openChatWithUser(state.activePeer.username);
+          }
         }
       }
       await refreshChats();
@@ -2636,6 +4029,90 @@
       switchAuthTab('register');
     });
 
+    // Forgot Password Flow
+    if (els.forgotPasswordBtn) {
+      els.forgotPasswordBtn.addEventListener('click', showForgotPasswordStep);
+    }
+    if (els.forgotBackBtn) {
+      els.forgotBackBtn.addEventListener('click', () => switchAuthTab('login'));
+    }
+    if (els.forgotSendBtn) {
+      els.forgotSendBtn.addEventListener('click', async () => {
+        const identifier = els.forgotIdentifier ? els.forgotIdentifier.value.trim() : '';
+        if (!identifier) {
+          if (els.forgotReqError) {
+            els.forgotReqError.textContent = 'Please enter your username or email.';
+            els.forgotReqError.classList.remove('hidden');
+          }
+          return;
+        }
+        if (els.forgotReqError) els.forgotReqError.classList.add('hidden');
+        els.forgotSendBtn.disabled = true;
+        try {
+          const data = await api('/api/auth/forgot-password', {
+            method: 'POST',
+            body: { identifier }
+          });
+          state.forgotVerificationId = data.verificationId;
+          if (els.forgotStepRequest) els.forgotStepRequest.classList.add('hidden');
+          if (els.forgotStepReset) els.forgotStepReset.classList.remove('hidden');
+          if (els.forgotSubtitle) {
+            els.forgotSubtitle.innerHTML = `Enter the 6-digit code sent to <strong>${escapeHtml(data.maskedEmail)}</strong> and choose a new password.`;
+          }
+          if (els.forgotDevBanner) {
+            if (data.deliveryMode === 'dev' && data.devCode) {
+              els.forgotDevBanner.innerHTML = `Local Dev Preview:<br/>Your reset code is <strong>${escapeHtml(data.devCode)}</strong>`;
+              els.forgotDevBanner.classList.remove('hidden');
+            } else {
+              els.forgotDevBanner.classList.add('hidden');
+            }
+          }
+          if (els.forgotCode) {
+            els.forgotCode.value = '';
+            els.forgotCode.focus();
+          }
+          if (els.forgotNewPassword) els.forgotNewPassword.value = '';
+        } catch (err) {
+          if (els.forgotReqError) {
+            els.forgotReqError.textContent = err.message;
+            els.forgotReqError.classList.remove('hidden');
+          }
+        } finally {
+          els.forgotSendBtn.disabled = false;
+        }
+      });
+    }
+    if (els.forgotForm) {
+      els.forgotForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!state.forgotVerificationId) return;
+        const code = els.forgotCode ? els.forgotCode.value.trim() : '';
+        const newPassword = els.forgotNewPassword ? els.forgotNewPassword.value : '';
+        if (els.forgotResetError) els.forgotResetError.classList.add('hidden');
+        if (els.forgotResetSubmit) els.forgotResetSubmit.disabled = true;
+        try {
+          await api('/api/auth/reset-password', {
+            method: 'POST',
+            body: {
+              verificationId: state.forgotVerificationId,
+              code,
+              newPassword
+            }
+          });
+          state.forgotVerificationId = null;
+          switchAuthTab('login');
+          showToast('Password updated! You can now sign in.', 'success');
+        } catch (err) {
+          if (els.forgotResetError) {
+            els.forgotResetError.textContent = err.message;
+            els.forgotResetError.classList.remove('hidden');
+          }
+        } finally {
+          if (els.forgotResetSubmit) els.forgotResetSubmit.disabled = false;
+        }
+      });
+    }
+
     // Drawer & Settings
     els.hamburgerBtn.addEventListener('click', openDrawer);
     els.navDrawerBackdrop.addEventListener('click', closeDrawer);
@@ -2663,6 +4140,24 @@
     els.updateInstallBtn.addEventListener('click', () => {
       if (hasAndroidUpdater()) window.AndroidBridge.startAppUpdate();
     });
+    if (els.menuSavedMessages) {
+      els.menuSavedMessages.addEventListener('click', async () => {
+        closeDrawer();
+        await openSavedMessages();
+      });
+    }
+    if (els.menuFriends) {
+      els.menuFriends.addEventListener('click', () => {
+        closeDrawer();
+        state.browseMode = false;
+        state.searchQuery = '';
+        els.sidebarSearch.value = '';
+        state.sidebarFilter = 'friends';
+        els.appShell.classList.remove('mobile-chat-open');
+        refreshFriends();
+        renderSidebar();
+      });
+    }
     els.menuFindUsers.addEventListener('click', () => {
       closeDrawer();
       triggerBrowseUsers();
@@ -2688,6 +4183,9 @@
       if (state.eventSource) state.eventSource.close();
       state.me = null;
       state.chats = [];
+      state.friends = [];
+      state.friendRequestsSent = [];
+      state.friendRequestsReceived = [];
       state.activeChatId = null;
       state.activePeer = null;
       state.activeRoom = null;
@@ -2841,6 +4339,259 @@
       showToast('Appearance reset to defaults', 'success');
     });
 
+    // Shareable Profile Link & QR Actions
+    if (els.copyProfileLinkBtn) {
+      els.copyProfileLinkBtn.addEventListener('click', async () => {
+        const url = els.settingsProfileLink ? els.settingsProfileLink.value : '';
+        if (!url) return;
+        try {
+          if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(url);
+          }
+          showToast('Profile link copied!', 'success');
+        } catch {
+          showToast('Copy failed — please select and copy the link.', 'error');
+        }
+      });
+    }
+    if (els.shareProfileLinkBtn) {
+      els.shareProfileLinkBtn.addEventListener('click', async () => {
+        const url = els.settingsProfileLink ? els.settingsProfileLink.value : '';
+        if (!url) return;
+        if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+          try {
+            await navigator.share({
+              title: 'Add me on VibeRoom',
+              text: state.me ? `Chat with @${state.me.username} on VibeRoom` : 'Join me on VibeRoom',
+              url
+            });
+            return;
+          } catch {
+            // Fall back to clipboard
+          }
+        }
+        if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(url).catch(() => {});
+          showToast('Profile link copied!', 'success');
+        }
+      });
+    }
+
+    // Change Password (in Account & Profile Settings)
+    if (els.changePasswordForm) {
+      els.changePasswordForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (els.chgPassError) els.chgPassError.classList.add('hidden');
+        const currentPassword = els.chgCurPassword ? els.chgCurPassword.value : '';
+        const newPassword = els.chgNewPassword ? els.chgNewPassword.value : '';
+        const confirmPassword = els.chgConfirmPassword ? els.chgConfirmPassword.value : '';
+        if (newPassword !== confirmPassword) {
+          if (els.chgPassError) {
+            els.chgPassError.textContent = 'New passwords do not match.';
+            els.chgPassError.classList.remove('hidden');
+          }
+          return;
+        }
+        if (els.chgPassSubmit) els.chgPassSubmit.disabled = true;
+        try {
+          await api('/api/users/me/password', {
+            method: 'POST',
+            body: { currentPassword, newPassword }
+          });
+          els.changePasswordForm.reset();
+          showToast('Password updated!', 'success');
+        } catch (err) {
+          if (els.chgPassError) {
+            els.chgPassError.textContent = err.message;
+            els.chgPassError.classList.remove('hidden');
+          }
+        } finally {
+          if (els.chgPassSubmit) els.chgPassSubmit.disabled = false;
+        }
+      });
+    }
+
+    // Privacy Settings (Everyone / Contacts / Nobody)
+    const bindPrivacySelect = (el, key) => {
+      if (!el) return;
+      el.addEventListener('change', async () => {
+        try {
+          const data = await api('/api/users/me/privacy', {
+            method: 'PATCH',
+            body: { [key]: el.value }
+          });
+          if (data.user) state.me = data.user;
+          showToast('Privacy setting updated', 'success');
+        } catch (err) {
+          syncPrivacyUI();
+          showToast(err.message, 'error');
+        }
+      });
+    };
+    bindPrivacySelect(els.privEmail, 'email');
+    bindPrivacySelect(els.privBirthday, 'birthday');
+    bindPrivacySelect(els.privLastSeen, 'lastSeen');
+    bindPrivacySelect(els.privAvatar, 'avatar');
+
+    if (els.blockedUsersList) {
+      els.blockedUsersList.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-unblock-user]');
+        if (!btn) return;
+        performBlockToggle(btn.dataset.unblockUser, false);
+      });
+    }
+
+    // Delete Account (Email OTP + "DELETE" Confirmation)
+    if (els.deleteAccSendCodeBtn) {
+      els.deleteAccSendCodeBtn.addEventListener('click', async () => {
+        els.deleteAccSendCodeBtn.disabled = true;
+        if (els.deleteAccError) els.deleteAccError.classList.add('hidden');
+        try {
+          const data = await api('/api/users/me/delete-request', { method: 'POST', body: {} });
+          state.deleteAccountVerificationId = data.verificationId;
+          if (els.deleteAccStepRequest) els.deleteAccStepRequest.classList.add('hidden');
+          if (els.deleteAccStepConfirm) els.deleteAccStepConfirm.classList.remove('hidden');
+          if (els.deleteAccMaskedSub) {
+            els.deleteAccMaskedSub.innerHTML = `Enter the 6-digit code sent to <strong>${escapeHtml(data.maskedEmail)}</strong> and type <code>DELETE</code>.`;
+          }
+          if (els.deleteAccDevBanner) {
+            if (data.deliveryMode === 'dev' && data.devCode) {
+              els.deleteAccDevBanner.innerHTML = `Local Dev Preview:<br/>Your deletion code is <strong>${escapeHtml(data.devCode)}</strong>`;
+              els.deleteAccDevBanner.classList.remove('hidden');
+            } else {
+              els.deleteAccDevBanner.classList.add('hidden');
+            }
+          }
+          if (els.deleteAccCode) els.deleteAccCode.focus();
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          els.deleteAccSendCodeBtn.disabled = false;
+        }
+      });
+    }
+    if (els.deleteAccConfirmBtn) {
+      els.deleteAccConfirmBtn.addEventListener('click', async () => {
+        if (!state.deleteAccountVerificationId) return;
+        if (els.deleteAccError) els.deleteAccError.classList.add('hidden');
+        const code = els.deleteAccCode ? els.deleteAccCode.value.trim() : '';
+        const confirmText = els.deleteAccPhrase ? els.deleteAccPhrase.value.trim() : '';
+        if (confirmText !== 'DELETE') {
+          if (els.deleteAccError) {
+            els.deleteAccError.textContent = 'Please type DELETE in uppercase to confirm.';
+            els.deleteAccError.classList.remove('hidden');
+          }
+          return;
+        }
+        els.deleteAccConfirmBtn.disabled = true;
+        try {
+          await api('/api/users/me/delete-confirm', {
+            method: 'POST',
+            body: {
+              verificationId: state.deleteAccountVerificationId,
+              code,
+              confirmText
+            }
+          });
+          if (state.eventSource) state.eventSource.close();
+          state.me = null;
+          state.chats = [];
+          state.activeChatId = null;
+          closeSettingsModal();
+          showAuthScreen();
+          showToast('Your account has been deleted. Username and email are now released.', 'info');
+        } catch (err) {
+          if (els.deleteAccError) {
+            els.deleteAccError.textContent = err.message;
+            els.deleteAccError.classList.remove('hidden');
+          }
+        } finally {
+          els.deleteAccConfirmBtn.disabled = false;
+        }
+      });
+    }
+
+    // Block, Unblock, Report & User Link Preview Modal
+    if (els.infoBlockBtn) {
+      els.infoBlockBtn.addEventListener('click', () => {
+        if (!state.activePeer) return;
+        performBlockToggle(state.activePeer.username, !state.activePeer.blockedByMe);
+      });
+    }
+    if (els.dmUnblockInlineBtn) {
+      els.dmUnblockInlineBtn.addEventListener('click', () => {
+        if (!state.activePeer) return;
+        performBlockToggle(state.activePeer.username, false);
+      });
+    }
+    if (els.infoReportBtn) {
+      els.infoReportBtn.addEventListener('click', () => {
+        if (!state.activePeer) return;
+        openReportModal(state.activePeer.username);
+      });
+    }
+    if (els.reportModalBackdrop) els.reportModalBackdrop.addEventListener('click', closeReportModal);
+    if (els.reportModalClose) els.reportModalClose.addEventListener('click', closeReportModal);
+    if (els.reportCancelBtn) els.reportCancelBtn.addEventListener('click', closeReportModal);
+    if (els.reportUserForm) {
+      els.reportUserForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!state.reportTargetUsername) return;
+        if (els.reportSubmitBtn) els.reportSubmitBtn.disabled = true;
+        try {
+          await api('/api/users/report', {
+            method: 'POST',
+            body: {
+              targetUsername: state.reportTargetUsername,
+              reason: els.reportReason ? els.reportReason.value : 'spam',
+              details: els.reportDetails ? els.reportDetails.value.trim() : '',
+              chatId: state.activeChatId || null
+            }
+          });
+          closeReportModal();
+          showToast('Report submitted. Thank you for helping keep VibeRoom safe.', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          if (els.reportSubmitBtn) els.reportSubmitBtn.disabled = false;
+        }
+      });
+    }
+
+    if (els.userPreviewBackdrop) els.userPreviewBackdrop.addEventListener('click', closeUserPreviewModal);
+    if (els.userPreviewClose) els.userPreviewClose.addEventListener('click', closeUserPreviewModal);
+    if (els.userPreviewActions) {
+      els.userPreviewActions.addEventListener('click', async (e) => {
+        const msgBtn = e.target.closest('[data-preview-message]');
+        if (msgBtn) {
+          const uname = msgBtn.dataset.previewMessage;
+          closeUserPreviewModal();
+          await openChatWithUser(uname);
+          return;
+        }
+        const friendBtn = e.target.closest('[data-friend-action]');
+        if (friendBtn) {
+          const uname = friendBtn.dataset.friendUser;
+          await performFriendAction(friendBtn.dataset.friendAction, uname);
+          if (state.previewedProfileUser && state.previewedProfileUser.username === uname) {
+            await openUserProfilePreviewModal(uname);
+          }
+          return;
+        }
+        const blkBtn = e.target.closest('[data-preview-block]');
+        if (blkBtn) {
+          await performBlockToggle(blkBtn.dataset.previewUser, blkBtn.dataset.previewBlock === 'block');
+          return;
+        }
+        const rptBtn = e.target.closest('[data-preview-report]');
+        if (rptBtn) {
+          const uname = rptBtn.dataset.previewReport;
+          closeUserPreviewModal();
+          openReportModal(uname);
+        }
+      });
+    }
+
     // Search & Browse
     els.sidebarSearch.addEventListener('input', () => {
       const q = els.sidebarSearch.value;
@@ -2870,26 +4621,249 @@
       }
     });
 
-    // Sidebar filter tabs (All Chats / Unread)
+    // Sidebar filter tabs (All Chats / Unread / Friends)
     if (els.sidebarTabs) {
       els.sidebarTabs.addEventListener('click', (e) => {
         const btn = e.target.closest('[data-chat-filter]');
         if (!btn) return;
-        state.sidebarFilter = btn.dataset.chatFilter === 'unread' ? 'unread' : 'all';
+        const next = btn.dataset.chatFilter;
+        state.sidebarFilter = next === 'unread' ? 'unread' : (next === 'friends' ? 'friends' : 'all');
+        if (state.sidebarFilter === 'friends') {
+          refreshFriends();
+        }
         renderSidebar();
       });
     }
 
-    // Sidebar click & keyboard delegation
+    // Sidebar click, right-click context menu (Desktop), long-press select (Mobile) & keyboard delegation
+    let suppressSidebarClickUntil = 0;
+    let activeChatMenuId = null;
+
+    function closeChatContextMenu() {
+      activeChatMenuId = null;
+      if (els.chatContextOverlay) {
+        els.chatContextOverlay.classList.add('hidden');
+        els.chatContextOverlay.setAttribute('aria-hidden', 'true');
+      }
+    }
+
+    function openChatContextMenu(chatId, anchorX, anchorY) {
+      const chat = state.chats.find((c) => c.id === chatId);
+      if (!chat || !els.chatContextOverlay || !els.chatContextCard) return;
+      closeChatContextMenu();
+      activeChatMenuId = chatId;
+
+      const isSaved = chat.type === 'saved';
+      const items = [
+        {
+          action: 'select',
+          label: 'Select Chats',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>'
+        }
+      ];
+
+      if (!isSaved) {
+        items.push({
+          action: 'pin',
+          label: chat.isPinned ? 'Unpin Chat' : 'Pin Chat',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>'
+        });
+        items.push({
+          action: 'mute',
+          label: chat.isMuted ? 'Unmute Notifications' : 'Mute Notifications',
+          icon: chat.isMuted
+            ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>'
+            : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+        });
+      }
+
+      items.push({
+        action: 'delete',
+        label: 'Delete Chat',
+        danger: true,
+        icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>'
+      });
+
+      els.chatContextCard.innerHTML = items.map((it) => `
+        <button type="button" class="msg-ctx-item${it.danger ? ' danger' : ''}" data-chat-ctx-action="${it.action}">
+          ${it.icon}
+          <span>${escapeHtml(it.label)}</span>
+        </button>
+      `).join('');
+
+      els.chatContextOverlay.classList.remove('hidden');
+      els.chatContextOverlay.setAttribute('aria-hidden', 'false');
+
+      const vw = window.innerWidth || 360;
+      const vh = window.innerHeight || 640;
+      const w = els.chatContextCard.offsetWidth || 210;
+      const h = els.chatContextCard.offsetHeight || 180;
+      const left = Math.max(8, Math.min(anchorX, vw - w - 12));
+      const top = Math.max(8, Math.min(anchorY, vh - h - 12));
+      els.chatContextCard.style.position = 'fixed';
+      els.chatContextCard.style.left = `${left}px`;
+      els.chatContextCard.style.top = `${top}px`;
+    }
+
+    if (els.chatContextBackdrop) {
+      els.chatContextBackdrop.addEventListener('click', closeChatContextMenu);
+    }
+    if (els.chatContextCard) {
+      els.chatContextCard.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-chat-ctx-action]');
+        if (!btn || !activeChatMenuId) return;
+        const action = btn.dataset.chatCtxAction;
+        const chatId = activeChatMenuId;
+        const chat = state.chats.find((c) => c.id === chatId);
+        closeChatContextMenu();
+        if (!chat) return;
+        if (action === 'select') {
+          enterChatSelectMode(chatId);
+        } else if (action === 'pin') {
+          await updateChatPrefs(chatId, { pinned: !chat.isPinned });
+        } else if (action === 'mute') {
+          await updateChatPrefs(chatId, { muted: !chat.isMuted });
+          showToast(chat.isMuted ? 'Notifications unmuted' : 'Notifications muted', 'success');
+        } else if (action === 'delete') {
+          openDeleteConfirmForChats([chatId]);
+        }
+      });
+    }
+
+    if (els.chatSelCancelBtn) {
+      els.chatSelCancelBtn.addEventListener('click', exitChatSelectMode);
+    }
+    if (els.chatSelPinBtn) {
+      els.chatSelPinBtn.addEventListener('click', async () => {
+        const ids = Array.from(state.selectedChatIds);
+        if (ids.length === 0) return;
+        const nextPinned = els.chatSelPinBtn.dataset.nextPinned === '1';
+        try {
+          await api('/api/chats/bulk-prefs', {
+            method: 'POST',
+            body: { chatIds: ids, pinned: nextPinned }
+          });
+          showToast(nextPinned ? 'Pinned selected chats' : 'Unpinned selected chats', 'success');
+          exitChatSelectMode();
+          await refreshChats();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
+    if (els.chatSelMuteBtn) {
+      els.chatSelMuteBtn.addEventListener('click', async () => {
+        const ids = Array.from(state.selectedChatIds);
+        if (ids.length === 0) return;
+        const nextMuted = els.chatSelMuteBtn.dataset.nextMuted === '1';
+        try {
+          await api('/api/chats/bulk-prefs', {
+            method: 'POST',
+            body: { chatIds: ids, muted: nextMuted }
+          });
+          showToast(nextMuted ? 'Muted selected chats' : 'Unmuted selected chats', 'success');
+          exitChatSelectMode();
+          await refreshChats();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
+    if (els.chatSelDeleteBtn) {
+      els.chatSelDeleteBtn.addEventListener('click', () => {
+        const ids = Array.from(state.selectedChatIds);
+        if (ids.length > 0) openDeleteConfirmForChats(ids);
+      });
+    }
+
+    if (els.deleteConfirmBackdrop) els.deleteConfirmBackdrop.addEventListener('click', closeDeleteConfirmModal);
+    if (els.deleteConfirmClose) els.deleteConfirmClose.addEventListener('click', closeDeleteConfirmModal);
+    if (els.deleteConfirmCancel) els.deleteConfirmCancel.addEventListener('click', closeDeleteConfirmModal);
+    if (els.deleteConfirmSubmit) els.deleteConfirmSubmit.addEventListener('click', submitDeleteConfirmModal);
+
     function openChatFromSidebarRow(row) {
       if (!row) return;
+      if (state.chatSelectMode && row.dataset.chatId) {
+        toggleChatSelected(row.dataset.chatId);
+        return;
+      }
       if (row.dataset.openChat) openRoomById(row.dataset.openChat);
       else if (row.dataset.openUser) openChatWithUser(row.dataset.openUser);
     }
     els.sidebarList.addEventListener('click', (e) => {
-      const row = e.target.closest('[data-open-chat], [data-open-user]');
+      if (Date.now() < suppressSidebarClickUntil) return;
+      const subBtn = e.target.closest('[data-friends-subtab]');
+      if (subBtn) {
+        state.friendsSubTab = subBtn.dataset.friendsSubtab || 'friends';
+        renderSidebar();
+        return;
+      }
+      const friendBtn = e.target.closest('[data-friend-action]');
+      if (friendBtn) {
+        e.stopPropagation();
+        performFriendAction(friendBtn.dataset.friendAction, friendBtn.dataset.friendUser);
+        return;
+      }
+      const row = e.target.closest('[data-chat-id], [data-open-chat], [data-open-user]');
       openChatFromSidebarRow(row);
     });
+
+    els.sidebarList.addEventListener('contextmenu', (e) => {
+      const row = e.target.closest('.chat-row[data-chat-id]');
+      if (!row) return;
+      e.preventDefault();
+      if (isMobileTouchMode()) return;
+      openChatContextMenu(row.dataset.chatId, e.clientX, e.clientY);
+    });
+
+    let sidebarLongPressTimer = null;
+    let sidebarTouchStartX = 0;
+    let sidebarTouchStartY = 0;
+    const clearSidebarLongPress = () => {
+      if (sidebarLongPressTimer) {
+        clearTimeout(sidebarLongPressTimer);
+        sidebarLongPressTimer = null;
+      }
+    };
+    els.sidebarList.addEventListener('touchstart', (e) => {
+      clearSidebarLongPress();
+      const row = e.target.closest('.chat-row[data-chat-id]');
+      if (!row || e.target.closest('button')) return;
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      sidebarTouchStartX = t.clientX;
+      sidebarTouchStartY = t.clientY;
+      const chatId = row.dataset.chatId;
+      sidebarLongPressTimer = setTimeout(() => {
+        sidebarLongPressTimer = null;
+        suppressSidebarClickUntil = Date.now() + 550;
+        if (navigator && typeof navigator.vibrate === 'function') {
+          try { navigator.vibrate(14); } catch { }
+        }
+        if (state.chatSelectMode) {
+          toggleChatSelected(chatId);
+        } else {
+          enterChatSelectMode(chatId);
+        }
+      }, 420);
+    }, { passive: true });
+    els.sidebarList.addEventListener('touchmove', (e) => {
+      if (!sidebarLongPressTimer) return;
+      const t = e.touches && e.touches[0];
+      if (!t) return;
+      if (Math.abs(t.clientX - sidebarTouchStartX) > 10 || Math.abs(t.clientY - sidebarTouchStartY) > 10) {
+        clearSidebarLongPress();
+      }
+    }, { passive: true });
+    els.sidebarList.addEventListener('touchend', clearSidebarLongPress, { passive: true });
+    els.sidebarList.addEventListener('touchcancel', clearSidebarLongPress, { passive: true });
+    if (els.infoFriendControls) {
+      els.infoFriendControls.addEventListener('click', (e) => {
+        const friendBtn = e.target.closest('[data-friend-action]');
+        if (!friendBtn) return;
+        performFriendAction(friendBtn.dataset.friendAction, friendBtn.dataset.friendUser);
+      });
+    }
     els.sidebarList.addEventListener('keydown', (e) => {
       const row = e.target.closest('.chat-row[data-open-chat], .chat-row[data-open-user]');
       if (!row) return;
@@ -3097,15 +5071,9 @@
       showToast('Message copied to clipboard', 'success');
     }
 
-    async function deleteMessageById(msgId) {
+    function deleteMessageById(msgId) {
       if (!state.activeChatId || !msgId) return;
-      try {
-        await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/messages/${encodeURIComponent(msgId)}`, {
-          method: 'DELETE'
-        });
-      } catch (err) {
-        showToast(err.message, 'error');
-      }
+      openDeleteConfirmForMessages([msgId]);
     }
 
     function renderContextReactionBar(msg, expanded) {
@@ -3117,8 +5085,10 @@
         const active = Array.isArray(users) && state.me && users.includes(state.me.username);
         return `<button type="button" class="msg-ctx-react-btn${active ? ' active' : ''}" data-ctx-react="${escapeHtml(emoji)}" aria-label="React ${escapeHtml(emoji)}">${escapeHtml(emoji)}</button>`;
       }).join('');
-      const chevron = expanded ? '⌃' : '⌄';
-      const moreBtnHtml = `<button type="button" class="msg-ctx-react-more" data-ctx-more-react="1" aria-label="More reactions">${chevron}</button>`;
+      const chevronSvg = expanded
+        ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>'
+        : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
+      const moreBtnHtml = `<button type="button" class="msg-ctx-react-more" data-ctx-more-react="1" aria-label="More reactions">${chevronSvg}</button>`;
       els.msgContextReactions.innerHTML = buttonsHtml + moreBtnHtml;
     }
 
@@ -3153,6 +5123,14 @@
       const msg = state.messages.find((m) => m.id === msgId);
       if (!msg || !els.msgContextOverlay || !els.msgContextCard) return;
 
+      if (typeof window !== 'undefined' && typeof window.getSelection === 'function') {
+        try {
+          const sel = window.getSelection();
+          if (sel && typeof sel.removeAllRanges === 'function') sel.removeAllRanges();
+        } catch {
+        }
+      }
+
       closeMessageContextMenu();
       activeMenuMsgId = msgId;
       activeMenuExpanded = false;
@@ -3164,6 +5142,12 @@
 
       const isMine = state.me && msg.sender === state.me.username;
       const firstAtt = Array.isArray(msg.attachments) && msg.attachments[0] ? msg.attachments[0] : null;
+      const isChannelReadOnly = Boolean(
+        state.activeRoom &&
+        state.activeRoom.type === 'channel' &&
+        (!state.me || !Array.isArray(state.activeRoom.admins) || !state.activeRoom.admins.includes(state.me.username))
+      );
+      const isCurrentlyPinned = Boolean(state.pinnedMessage && state.pinnedMessage.id === msg.id);
       const items = [
         {
           action: 'reply',
@@ -3172,11 +5156,40 @@
         }
       ];
 
+      if (isMine && msg.kind !== 'game' && msg.kind !== 'call') {
+        items.push({
+          action: 'edit',
+          label: 'Edit',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>'
+        });
+      }
+
+      if (!isChannelReadOnly && msg.kind !== 'game' && msg.kind !== 'call') {
+        items.push({
+          action: isCurrentlyPinned ? 'unpin' : 'pin',
+          label: isCurrentlyPinned ? 'Unpin' : 'Pin',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>'
+        });
+      }
+
       if (msg.text) {
         items.push({
           action: 'copy',
           label: 'Copy',
           icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>'
+        });
+      }
+
+      if (msg.kind !== 'game' && msg.kind !== 'call') {
+        items.push({
+          action: 'forward',
+          label: 'Forward',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>'
+        });
+        items.push({
+          action: 'select',
+          label: 'Select',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>'
         });
       }
 
@@ -3190,7 +5203,7 @@
         });
       }
 
-      if (isMine) {
+      if (msg.kind !== 'system' && msg.sender !== 'system') {
         items.push({
           action: 'delete',
           label: 'Delete',
@@ -3246,6 +5259,16 @@
 
         if (action === 'reply') {
           setReply(msgId);
+        } else if (action === 'edit') {
+          startEditMessage(msgId);
+        } else if (action === 'pin') {
+          await togglePinMessage(msgId, false);
+        } else if (action === 'unpin') {
+          await togglePinMessage(msgId, true);
+        } else if (action === 'forward') {
+          openForwardModal([msgId]);
+        } else if (action === 'select') {
+          enterSelectMode(msgId);
         } else if (action === 'copy') {
           await copyMessageText(msg);
         } else if (action === 'open-media') {
@@ -3270,6 +5293,20 @@
     // Message list click & long-press delegation
     const handleMediaOrActionClick = async (e) => {
       if (Date.now() < suppressNextClickUntil) return;
+
+      if (state.selectMode && e.currentTarget === els.messagesList) {
+        const row = e.target.closest('.msg-row[data-msg-id]');
+        if (row && row.dataset.msgId) {
+          toggleMessageSelected(row.dataset.msgId);
+          return;
+        }
+      }
+
+      const spoilerEl = e.target.closest('.msg-spoiler');
+      if (spoilerEl) {
+        spoilerEl.classList.toggle('revealed');
+        return;
+      }
 
       const lightboxTrigger = e.target.closest('[data-lightbox-url]');
       if (lightboxTrigger) {
@@ -3500,6 +5537,198 @@
     els.cancelReplyBtn.addEventListener('mousedown', keepInputFocusOnTap);
     els.cancelReplyBtn.addEventListener('click', clearReply);
 
+    if (els.cancelEditBtn) {
+      els.cancelEditBtn.addEventListener('pointerdown', keepInputFocusOnTap);
+      els.cancelEditBtn.addEventListener('click', () => cancelEditMode(true));
+    }
+
+    if (els.pinnedMsgJump) {
+      els.pinnedMsgJump.addEventListener('click', () => {
+        if (!state.pinnedMessage || !state.pinnedMessage.id) return;
+        const targetEl = $(`msg-${state.pinnedMessage.id}`);
+        if (targetEl) {
+          targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          targetEl.classList.remove('highlight-pulse');
+          void targetEl.offsetWidth;
+          targetEl.classList.add('highlight-pulse');
+        } else {
+          showToast('Pinned message is outside loaded view.', 'info');
+        }
+      });
+    }
+    if (els.unpinMsgBtn) {
+      els.unpinMsgBtn.addEventListener('click', () => togglePinMessage(null, true));
+    }
+
+    if (els.infoPinChatBtn) {
+      els.infoPinChatBtn.addEventListener('click', () => {
+        if (!state.activeChatId) return;
+        const chatObj = state.chats.find((c) => c.id === state.activeChatId) || state.activeChatMeta || {};
+        updateChatPrefs(state.activeChatId, { pinned: !chatObj.isPinned });
+      });
+    }
+    if (els.infoMuteChatBtn) {
+      els.infoMuteChatBtn.addEventListener('click', () => {
+        if (!state.activeChatId) return;
+        const chatObj = state.chats.find((c) => c.id === state.activeChatId) || state.activeChatMeta || {};
+        updateChatPrefs(state.activeChatId, { muted: !chatObj.isMuted });
+      });
+    }
+
+    if (els.multiCopyBtn) els.multiCopyBtn.addEventListener('click', multiCopySelected);
+    if (els.multiForwardBtn) {
+      els.multiForwardBtn.addEventListener('click', () => {
+        const ids = Array.from(state.selectedMsgIds);
+        if (ids.length > 0) openForwardModal(ids);
+      });
+    }
+    if (els.multiDeleteBtn) els.multiDeleteBtn.addEventListener('click', multiDeleteSelected);
+    if (els.multiCancelBtn) els.multiCancelBtn.addEventListener('click', exitSelectMode);
+
+    if (els.forwardModalBackdrop) els.forwardModalBackdrop.addEventListener('click', closeForwardModal);
+    if (els.forwardModalClose) els.forwardModalClose.addEventListener('click', closeForwardModal);
+    if (els.forwardTargetsList) {
+      els.forwardTargetsList.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-forward-target]');
+        if (!btn || !state.activeChatId || state.forwardMsgIds.length === 0) return;
+        const targetChatId = btn.dataset.forwardTarget;
+        const ids = state.forwardMsgIds.slice();
+        closeForwardModal();
+        try {
+          await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/forward`, {
+            method: 'POST',
+            body: { targetChatIds: [targetChatId], messageIds: ids }
+          });
+          exitSelectMode();
+          showToast('Message forwarded!', 'success');
+          await refreshChats();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
+
+    // Voice Note Recorder (hold-to-record OR tap-to-record + timer bar)
+    let voiceRecState = null;
+    function cleanupVoiceRecorderUI() {
+      if (voiceRecState) {
+        if (voiceRecState.timer) clearInterval(voiceRecState.timer);
+        if (voiceRecState.stream) {
+          try { voiceRecState.stream.getTracks().forEach((t) => t.stop()); } catch { }
+        }
+      }
+      voiceRecState = null;
+      if (els.voiceRecBar) els.voiceRecBar.classList.add('hidden');
+      if (els.voiceRecBtn) els.voiceRecBtn.classList.remove('recording');
+    }
+
+    async function sendVoiceAudioBlob(blob, mimeType) {
+      if (!state.activeChatId || !blob || blob.size < 400) return;
+      const chatId = state.activeChatId;
+      const ext = mimeType.includes('ogg') ? 'ogg' : (mimeType.includes('mp4') ? 'm4a' : 'webm');
+      const fd = new FormData();
+      fd.append('text', '');
+      if (state.replyTo && state.replyTo.id) fd.append('replyToId', state.replyTo.id);
+      fd.append('files', blob, `voice-${Date.now()}.${ext}`);
+      try {
+        const data = await sendWithProgress(`/api/chats/${encodeURIComponent(chatId)}/messages`, fd);
+        clearReply();
+        if (data.message && !state.messages.some((m) => m.id === data.message.id)) {
+          state.messages.push(data.message);
+          renderMessages(true);
+        }
+        playChime('send');
+        await refreshChats();
+      } catch (err) {
+        showToast(err.message || 'Failed to send voice message.', 'error');
+      }
+    }
+
+    function stopVoiceRecording(shouldSend) {
+      if (!voiceRecState) return;
+      voiceRecState.shouldSend = Boolean(shouldSend);
+      const rec = voiceRecState.recorder;
+      if (rec && rec.state !== 'inactive') {
+        try { rec.stop(); } catch { cleanupVoiceRecorderUI(); }
+      } else {
+        cleanupVoiceRecorderUI();
+      }
+    }
+
+    async function startVoiceRecording() {
+      if (!state.activeChatId || voiceRecState) return;
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function' || typeof MediaRecorder === 'undefined') {
+        showToast('Voice recording is not supported on this browser.', 'error');
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeOptions = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+        const chosenMime = mimeOptions.find((m) => typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(m)) || '';
+        const recorder = chosenMime ? new MediaRecorder(stream, { mimeType: chosenMime }) : new MediaRecorder(stream);
+        const chunks = [];
+        const startedAt = Date.now();
+        voiceRecState = { recorder, stream, chunks, startedAt, timer: null, shouldSend: false, mimeType: chosenMime || 'audio/webm' };
+
+        recorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) chunks.push(ev.data);
+        };
+        recorder.onstop = async () => {
+          const cur = voiceRecState;
+          const doSend = cur && cur.shouldSend;
+          const type = (cur && cur.mimeType) || 'audio/webm';
+          const blob = new Blob(chunks, { type });
+          cleanupVoiceRecorderUI();
+          if (doSend) {
+            await sendVoiceAudioBlob(blob, type);
+          }
+        };
+
+        recorder.start(150);
+        if (els.voiceRecBtn) els.voiceRecBtn.classList.add('recording');
+        if (els.voiceRecBar) els.voiceRecBar.classList.remove('hidden');
+        if (els.voiceRecTimer) els.voiceRecTimer.textContent = '0:00';
+        voiceRecState.timer = setInterval(() => {
+          if (!voiceRecState || !els.voiceRecTimer) return;
+          const sec = Math.floor((Date.now() - voiceRecState.startedAt) / 1000);
+          const m = Math.floor(sec / 60);
+          const s = String(sec % 60).padStart(2, '0');
+          els.voiceRecTimer.textContent = `${m}:${s}`;
+        }, 250);
+      } catch (err) {
+        cleanupVoiceRecorderUI();
+        showToast(err.message || 'Microphone permission denied.', 'error');
+      }
+    }
+
+    if (els.voiceRecBtn) {
+      let pressStartMs = 0;
+      els.voiceRecBtn.addEventListener('pointerdown', (e) => {
+        if (e.button && e.button !== 0) return;
+        pressStartMs = Date.now();
+        if (!voiceRecState) {
+          startVoiceRecording();
+        }
+      });
+      els.voiceRecBtn.addEventListener('pointerup', () => {
+        if (!voiceRecState) return;
+        const heldMs = Date.now() - pressStartMs;
+        // Held > 450ms -> Telegram hold-to-record release-to-send; short tap keeps recording bar open
+        if (heldMs > 450) {
+          stopVoiceRecording(true);
+        }
+      });
+      els.voiceRecBtn.addEventListener('pointercancel', () => {
+        if (voiceRecState) stopVoiceRecording(false);
+      });
+    }
+    if (els.voiceCancelBtn) {
+      els.voiceCancelBtn.addEventListener('click', () => stopVoiceRecording(false));
+    }
+    if (els.voiceSendBtn) {
+      els.voiceSendBtn.addEventListener('click', () => stopVoiceRecording(true));
+    }
+
     els.sendBtn.addEventListener('pointerdown', keepInputFocusOnTap);
     els.sendBtn.addEventListener('mousedown', keepInputFocusOnTap);
     els.sendBtn.addEventListener('touchend', (e) => {
@@ -3519,6 +5748,7 @@
 
     els.messageInput.addEventListener('input', () => {
       autoResizeInput();
+      updateComposerSendMicToggle();
       if (state.activeChatId) {
         saveChatDraft(state.activeChatId, els.messageInput.value);
       }
@@ -3596,6 +5826,7 @@
       input.selectionStart = input.selectionEnd = start + emoji.length;
       input.focus();
       autoResizeInput();
+      updateComposerSendMicToggle();
     });
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.emoji-picker-anchor')) {
@@ -3772,8 +6003,40 @@
         if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.handleEscape === 'function') {
           if (window.VibeRoomFeatures.handleEscape()) return;
         }
+        if (els.reportUserModal && !els.reportUserModal.classList.contains('hidden')) {
+          closeReportModal();
+          return;
+        }
+        if (els.userPreviewModal && !els.userPreviewModal.classList.contains('hidden')) {
+          closeUserPreviewModal();
+          return;
+        }
+        if (els.deleteConfirmModal && !els.deleteConfirmModal.classList.contains('hidden')) {
+          closeDeleteConfirmModal();
+          return;
+        }
+        if (els.chatContextOverlay && !els.chatContextOverlay.classList.contains('hidden')) {
+          closeChatContextMenu();
+          return;
+        }
+        if (state.chatSelectMode) {
+          exitChatSelectMode();
+          return;
+        }
         if (els.msgContextOverlay && !els.msgContextOverlay.classList.contains('hidden')) {
           closeMessageContextMenu();
+          return;
+        }
+        if (els.forwardModal && !els.forwardModal.classList.contains('hidden')) {
+          closeForwardModal();
+          return;
+        }
+        if (state.selectMode) {
+          exitSelectMode();
+          return;
+        }
+        if (state.editingMessage) {
+          cancelEditMode(true);
           return;
         }
         closeLightbox();
@@ -3795,7 +6058,7 @@
     updateAppUpdateUI();
     syncAndroidState(true);
     connectRealtime();
-    await refreshChats();
+    await Promise.all([refreshChats(), refreshFriends(), refreshBlockedUsers()]);
     if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onAuthenticated === 'function') {
       await window.VibeRoomFeatures.onAuthenticated(user);
     }
@@ -3803,6 +6066,11 @@
       const queued = state.queuedAndroidShare;
       state.queuedAndroidShare = null;
       handleIncomingAndroidShare(queued);
+    }
+    if (state.pendingProfileLinkUser) {
+      const targetHandle = state.pendingProfileLinkUser;
+      state.pendingProfileLinkUser = null;
+      await openUserProfilePreviewModal(targetHandle);
     }
   }
 
@@ -3863,6 +6131,13 @@
     if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.handleEscape === 'function') {
       if (window.VibeRoomFeatures.handleEscape()) return true;
     }
+    if (els.reportUserModal && !els.reportUserModal.classList.contains('hidden')) { closeReportModal(); return true; }
+    if (els.userPreviewModal && !els.userPreviewModal.classList.contains('hidden')) { closeUserPreviewModal(); return true; }
+    if (els.deleteConfirmModal && !els.deleteConfirmModal.classList.contains('hidden')) { closeDeleteConfirmModal(); return true; }
+    if (els.chatContextOverlay && !els.chatContextOverlay.classList.contains('hidden')) { els.chatContextOverlay.classList.add('hidden'); return true; }
+    if (state.chatSelectMode) { exitChatSelectMode(); return true; }
+    if (els.forwardModal && !els.forwardModal.classList.contains('hidden')) { closeForwardModal(); return true; }
+    if (state.selectMode) { exitSelectMode(); return true; }
     if (els.msgContextOverlay && !els.msgContextOverlay.classList.contains('hidden')) { closeMessageContextMenu(); return true; }
     if (!els.lightboxModal.classList.contains('hidden')) { closeLightbox(); return true; }
     if (!els.settingsModal.classList.contains('hidden')) {
@@ -3899,7 +6174,11 @@
     api,
     openChatWithUser,
     openRoomById,
+    openSavedMessages,
     refreshChats,
+    refreshFriends,
+    performFriendAction,
+    getRelationshipForUser,
     renderSidebar,
     renderMessages,
     renderInfoDrawer,
@@ -3928,6 +6207,21 @@
     initEmojiPopover();
     wireEvents();
     updateAppUpdateUI();
+    if (typeof window !== 'undefined' && window.location && window.location.search) {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const uParam = params.get('user');
+        if (uParam) {
+          state.pendingProfileLinkUser = uParam.trim().replace(/^@+/, '').toLowerCase();
+          if (window.history && typeof window.history.replaceState === 'function') {
+            params.delete('user');
+            const remaining = params.toString();
+            const nextUrl = window.location.pathname + (remaining ? `?${remaining}` : '') + (window.location.hash || '');
+            window.history.replaceState({}, '', nextUrl);
+          }
+        }
+      } catch { }
+    }
     if (hasAndroidUpdater()) {
       try {
         window.AndroidBridge.checkForAppUpdate(false);

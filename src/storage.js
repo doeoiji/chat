@@ -6,8 +6,25 @@ const { validateEmail } = require('./emailValidator');
 const { hashPassword, verifyPassword } = require('./auth');
 
 const USERNAME_REGEX = /^[a-z0-9_]{3,24}$/;
-const CHAT_ID_REGEX = /^(?:dm_[a-z0-9_]{3,24}__[a-z0-9_]{3,24}|(?:grp|chn)_[a-z0-9]{10,24})$/;
+const CHAT_ID_REGEX = /^(?:dm_[a-z0-9_]{3,24}__[a-z0-9_]{3,24}|saved_[a-z0-9_]{3,24}|(?:grp|chn)_[a-z0-9]{10,24})$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PRIVACY_LEVELS = new Set(['everyone', 'contacts', 'nobody']);
+const DEFAULT_PRIVACY = {
+  email: 'everyone',
+  birthday: 'everyone',
+  lastSeen: 'everyone',
+  avatar: 'everyone'
+};
+
+function normalizePrivacy(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    email: PRIVACY_LEVELS.has(src.email) ? src.email : DEFAULT_PRIVACY.email,
+    birthday: PRIVACY_LEVELS.has(src.birthday) ? src.birthday : DEFAULT_PRIVACY.birthday,
+    lastSeen: PRIVACY_LEVELS.has(src.lastSeen) ? src.lastSeen : DEFAULT_PRIVACY.lastSeen,
+    avatar: PRIVACY_LEVELS.has(src.avatar) ? src.avatar : DEFAULT_PRIVACY.avatar
+  };
+}
 
 function extractMentions(text) {
   if (typeof text !== 'string' || !text.includes('@')) return [];
@@ -135,6 +152,23 @@ function createStorage(config) {
 
   function toPublicUser(user) {
     if (!user) return null;
+    if (user.deleted) {
+      return {
+        id: user.id || 'deleted',
+        username: user.username,
+        displayName: 'Deleted Account',
+        email: null,
+        emailVerified: false,
+        bio: '',
+        birthday: null,
+        avatarColor: '#5C6670',
+        avatarUrl: null,
+        deleted: true,
+        createdAt: user.createdAt || null,
+        lastSeen: null,
+        privacy: { ...DEFAULT_PRIVACY }
+      };
+    }
     return {
       id: user.id,
       username: user.username,
@@ -146,7 +180,8 @@ function createStorage(config) {
       avatarColor: user.avatarColor,
       avatarUrl: user.avatarUrl || null,
       createdAt: user.createdAt,
-      lastSeen: user.lastSeen
+      lastSeen: user.lastSeen,
+      privacy: normalizePrivacy(user.privacy)
     };
   }
 
@@ -171,7 +206,7 @@ function createStorage(config) {
     return resolved;
   }
 
-  async function listActivePending() {
+  async function listActivePending(purpose = 'signup') {
     const entries = await fsp.readdir(config.pendingDir, { withFileTypes: true });
     const now = Date.now();
     const active = [];
@@ -183,6 +218,8 @@ function createStorage(config) {
         await fsp.unlink(fullPath).catch(() => {});
         continue;
       }
+      const itemPurpose = item.purpose || 'signup';
+      if (purpose && itemPurpose !== purpose) continue;
       active.push({ item, fullPath });
     }
     return active;
@@ -195,17 +232,32 @@ function createStorage(config) {
       if (!entry.isDirectory()) continue;
       const profilePath = path.join(config.usersDir, entry.name, 'profile.json');
       const profile = await readJson(profilePath);
-      if (profile && profile.username) {
+      if (profile && profile.username && !profile.deleted) {
         users.push(profile);
       }
     }
     return users;
   }
 
-  async function getUserByUsername(username) {
+  async function getRawProfile(username) {
     const folder = userFolder(username);
     if (!folder) return null;
     return readJson(path.join(folder, 'profile.json'));
+  }
+
+  async function getUserByUsername(username) {
+    const profile = await getRawProfile(username);
+    if (!profile || profile.deleted) return null;
+    return profile;
+  }
+
+  async function archiveDeletedProfileIfPresent(folder) {
+    const profilePath = path.join(folder, 'profile.json');
+    const existing = await readJson(profilePath);
+    if (existing && existing.deleted) {
+      const stamp = `${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+      await writeJsonAtomic(path.join(folder, `deleted_profile_${stamp}.json`), existing);
+    }
   }
 
   async function getUserByEmail(email) {
@@ -258,6 +310,7 @@ function createStorage(config) {
 
       const folder = userFolder(cleanUsername);
       await fsp.mkdir(path.join(folder, 'uploads'), { recursive: true });
+      await archiveDeletedProfileIfPresent(folder);
 
       const cleanDisplay = typeof displayName === 'string' && displayName.trim()
         ? displayName.trim().slice(0, 48)
@@ -277,6 +330,7 @@ function createStorage(config) {
         verifiedAt: now,
         passwordHash: hashPassword(password),
         bio: '',
+        privacy: { ...DEFAULT_PRIVACY },
         avatarColor: AVATAR_GRADIENTS[colorIndex],
         avatarUrl: null,
         createdAt: now,
@@ -472,7 +526,7 @@ function createStorage(config) {
     });
   }
 
-  async function verifyPendingRegistration(verificationId, codeInput) {
+  async function verifyOtpSession(verificationId, codeInput, expectedPurpose = 'signup', expiredLabel = 'Verification session') {
     const filePath = pendingFilePath(verificationId);
     if (!filePath) {
       const err = new Error('Invalid verification session.');
@@ -487,48 +541,54 @@ function createStorage(config) {
       throw err;
     }
 
-    return withLock('users:registry', async () => {
-      const record = await readJson(filePath);
-      if (!record) {
-        const err = new Error('Verification session not found or expired. Please register again.');
-        err.statusCode = 400;
-        throw err;
-      }
+    const record = await readJson(filePath);
+    if (!record || (record.purpose || 'signup') !== expectedPurpose) {
+      const err = new Error(`${expiredLabel} not found or expired.`);
+      err.statusCode = 400;
+      throw err;
+    }
 
-      const nowMs = Date.now();
-      if (nowMs > record.expiresAt) {
+    const nowMs = Date.now();
+    if (nowMs > record.expiresAt) {
+      await fsp.unlink(filePath).catch(() => {});
+      const err = new Error(`${expiredLabel} has expired. Please try again.`);
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const codeExpiry = typeof record.codeExpiresAt === 'number' ? record.codeExpiresAt : record.expiresAt;
+    if (nowMs > codeExpiry) {
+      const err = new Error('Verification code has expired. Please request a new code.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const candidateHash = hashVerificationCode(verificationId, cleanCode);
+    const a = Buffer.from(candidateHash, 'hex');
+    const b = Buffer.from(record.codeHash, 'hex');
+    const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+    if (!matches) {
+      record.attempts = (record.attempts || 0) + 1;
+      if (record.attempts >= (record.maxAttempts || 5)) {
         await fsp.unlink(filePath).catch(() => {});
-        const err = new Error('Verification session has expired. Please register again.');
+        const err = new Error('Too many incorrect attempts. Please request a new code.');
         err.statusCode = 400;
         throw err;
       }
+      await writeJsonAtomic(filePath, record);
+      const remaining = (record.maxAttempts || 5) - record.attempts;
+      const err = new Error(`Incorrect verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`);
+      err.statusCode = 400;
+      throw err;
+    }
 
-      const codeExpiry = typeof record.codeExpiresAt === 'number' ? record.codeExpiresAt : record.expiresAt;
-      if (nowMs > codeExpiry) {
-        const err = new Error('Verification code has expired. Please request a new code.');
-        err.statusCode = 400;
-        throw err;
-      }
+    return { record, filePath };
+  }
 
-      const candidateHash = hashVerificationCode(verificationId, cleanCode);
-      const a = Buffer.from(candidateHash, 'hex');
-      const b = Buffer.from(record.codeHash, 'hex');
-      const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
-
-      if (!matches) {
-        record.attempts = (record.attempts || 0) + 1;
-        if (record.attempts >= (record.maxAttempts || 5)) {
-          await fsp.unlink(filePath).catch(() => {});
-          const err = new Error('Too many incorrect attempts. Please register again.');
-          err.statusCode = 400;
-          throw err;
-        }
-        await writeJsonAtomic(filePath, record);
-        const remaining = (record.maxAttempts || 5) - record.attempts;
-        const err = new Error(`Incorrect verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`);
-        err.statusCode = 400;
-        throw err;
-      }
+  async function verifyPendingRegistration(verificationId, codeInput) {
+    return withLock('users:registry', async () => {
+      const { record, filePath } = await verifyOtpSession(verificationId, codeInput, 'signup', 'Verification session');
 
       // Final uniqueness safety check
       if (await getUserByUsername(record.username)) {
@@ -546,6 +606,7 @@ function createStorage(config) {
 
       const folder = userFolder(record.username);
       await fsp.mkdir(path.join(folder, 'uploads'), { recursive: true });
+      await archiveDeletedProfileIfPresent(folder);
 
       const colorIndex = Math.abs(
         record.username.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
@@ -561,6 +622,7 @@ function createStorage(config) {
         verifiedAt: now,
         passwordHash: record.passwordHash,
         bio: '',
+        privacy: { ...DEFAULT_PRIVACY },
         avatarColor: AVATAR_GRADIENTS[colorIndex],
         avatarUrl: null,
         createdAt: now,
@@ -571,6 +633,307 @@ function createStorage(config) {
       await fsp.unlink(filePath).catch(() => {});
       return toPublicUser(user);
     });
+  }
+
+  async function createOtpSession({ username, email, purpose }) {
+    const nowMs = Date.now();
+    let priorResendCount = -1;
+    const activeSame = await listActivePending(purpose);
+    for (const { item, fullPath } of activeSame) {
+      if (item.email === email && item.username === username) {
+        if (typeof item.nextResendAt === 'number' && nowMs < item.nextResendAt) {
+          const err = new Error(`Please wait ${formatWaitDuration(item.nextResendAt - nowMs)} before requesting another code.`);
+          err.statusCode = 429;
+          throw err;
+        }
+        priorResendCount = typeof item.resendCount === 'number' ? item.resendCount : 0;
+        await fsp.unlink(fullPath).catch(() => {});
+      }
+    }
+
+    const verificationId = crypto.randomUUID();
+    const code = String(crypto.randomInt(100000, 1000000));
+    const resendCount = priorResendCount >= 0 ? priorResendCount + 1 : 0;
+    const cooldownMs = getResendCooldownMs(resendCount);
+    const codeExpiresAt = nowMs + config.verificationTtlMs;
+    const nextResendAt = nowMs + cooldownMs;
+
+    const record = {
+      verificationId,
+      purpose,
+      username,
+      email,
+      codeHash: hashVerificationCode(verificationId, code),
+      attempts: 0,
+      maxAttempts: 5,
+      resendCount,
+      createdAt: new Date(nowMs).toISOString(),
+      lastSentAt: nowMs,
+      codeExpiresAt,
+      nextResendAt,
+      expiresAt: nowMs + config.verificationSessionTtlMs
+    };
+    await writeJsonAtomic(pendingFilePath(verificationId), record);
+    return {
+      verificationId,
+      username,
+      email,
+      maskedEmail: maskEmail(email),
+      code,
+      resendCount,
+      codeExpiresAt,
+      nextResendAt,
+      resendCooldownSeconds: Math.ceil(cooldownMs / 1000)
+    };
+  }
+
+  async function createPasswordResetRequest(identifier) {
+    const raw = String(identifier || '').trim().toLowerCase();
+    const cleanHandle = raw.startsWith('@') ? raw.slice(1).trim() : raw;
+    if (!cleanHandle) {
+      const err = new Error('Please enter your username or email address.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const user = raw.includes('@')
+      ? await getUserByEmail(raw)
+      : await getUserByUsername(cleanHandle);
+    if (!user || user.deleted) {
+      const err = new Error('No active account found with that username or email.');
+      err.statusCode = 404;
+      throw err;
+    }
+    return createOtpSession({ username: user.username, email: user.email, purpose: 'password_reset' });
+  }
+
+  async function resetPasswordWithOtp(verificationId, codeInput, newPassword) {
+    if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128) {
+      const err = new Error('New password must be 6–128 characters long.');
+      err.statusCode = 400;
+      throw err;
+    }
+    return withLock('users:registry', async () => {
+      const { record, filePath } = await verifyOtpSession(verificationId, codeInput, 'password_reset', 'Password reset session');
+      const user = await getUserByUsername(record.username);
+      if (!user) {
+        const err = new Error('Account no longer exists.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const folder = userFolder(user.username);
+      await withLock(`user:${user.username}`, async () => {
+        const profilePath = path.join(folder, 'profile.json');
+        const cur = await readJson(profilePath);
+        if (!cur || cur.deleted) {
+          const err = new Error('Account no longer exists.');
+          err.statusCode = 404;
+          throw err;
+        }
+        cur.passwordHash = hashPassword(newPassword);
+        cur.lastSeen = new Date().toISOString();
+        await writeJsonAtomic(profilePath, cur);
+      });
+      await fsp.unlink(filePath).catch(() => {});
+      return toPublicUser(user);
+    });
+  }
+
+  async function changeUserPassword(username, currentPassword, newPassword) {
+    if (typeof currentPassword !== 'string' || !currentPassword) {
+      const err = new Error('Current password is required.');
+      err.statusCode = 400;
+      throw err;
+    }
+    if (typeof newPassword !== 'string' || newPassword.length < 6 || newPassword.length > 128) {
+      const err = new Error('New password must be 6–128 characters long.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const folder = userFolder(username);
+    if (!folder) return null;
+    return withLock(`user:${username}`, async () => {
+      const profilePath = path.join(folder, 'profile.json');
+      const cur = await readJson(profilePath);
+      if (!cur || cur.deleted) {
+        const err = new Error('User not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      if (!verifyPassword(currentPassword, cur.passwordHash)) {
+        const err = new Error('Current password is incorrect.');
+        err.statusCode = 403;
+        throw err;
+      }
+      cur.passwordHash = hashPassword(newPassword);
+      cur.lastSeen = new Date().toISOString();
+      await writeJsonAtomic(profilePath, cur);
+      return toPublicUser(cur);
+    });
+  }
+
+  async function createDeleteAccountOtp(username) {
+    const user = await getUserByUsername(username);
+    if (!user) {
+      const err = new Error('User not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    return createOtpSession({ username: user.username, email: user.email, purpose: 'delete_account' });
+  }
+
+  async function confirmDeleteAccount(username, verificationId, codeInput, confirmText) {
+    if (String(confirmText || '').trim() !== 'DELETE') {
+      const err = new Error('Please type DELETE in uppercase to confirm account deletion.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const clean = String(username || '').trim().toLowerCase();
+    return withLock('users:registry', async () => {
+      const { record, filePath } = await verifyOtpSession(verificationId, codeInput, 'delete_account', 'Deletion confirmation');
+      if (record.username !== clean) {
+        const err = new Error('Verification session does not belong to your account.');
+        err.statusCode = 403;
+        throw err;
+      }
+      const folder = userFolder(clean);
+      if (!folder) {
+        const err = new Error('User not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const deletedSnapshot = await withLock(`user:${clean}`, async () => {
+        const profilePath = path.join(folder, 'profile.json');
+        const cur = await readJson(profilePath);
+        if (!cur || cur.deleted) {
+          const err = new Error('Account not found or already deleted.');
+          err.statusCode = 404;
+          throw err;
+        }
+        const now = new Date().toISOString();
+        cur.deleted = true;
+        cur.deletedAt = now;
+        cur.passwordHash = null;
+        cur.emailVerified = false;
+        await writeJsonAtomic(profilePath, cur);
+        return { username: cur.username, email: cur.email, deletedAt: now };
+      });
+      await fsp.unlink(filePath).catch(() => {});
+      return deletedSnapshot;
+    });
+  }
+
+  async function updateUserPrivacy(username, privacyUpdates = {}) {
+    const folder = userFolder(username);
+    if (!folder) return null;
+    return withLock(`user:${username}`, async () => {
+      const profilePath = path.join(folder, 'profile.json');
+      const cur = await readJson(profilePath);
+      if (!cur || cur.deleted) return null;
+      const merged = normalizePrivacy({ ...(cur.privacy || {}), ...(privacyUpdates || {}) });
+      cur.privacy = merged;
+      await writeJsonAtomic(profilePath, cur);
+      return toPublicUser(cur);
+    });
+  }
+
+  async function readBlockedListRaw(username) {
+    const folder = userFolder(username);
+    if (!folder) return [];
+    const data = await readJson(path.join(folder, 'blocked.json'), {});
+    return Array.isArray(data && data.blocked) ? data.blocked : [];
+  }
+
+  async function blockUser(username, targetUsername) {
+    const me = String(username || '').trim().toLowerCase();
+    const target = String(targetUsername || '').trim().toLowerCase();
+    if (!USERNAME_REGEX.test(me) || !USERNAME_REGEX.test(target) || me === target) {
+      const err = new Error('Invalid target user to block.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const targetUser = await getUserByUsername(target);
+    if (!targetUser) {
+      const err = new Error('User not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const folder = userFolder(me);
+    return withLock(`blocked:${me}`, async () => {
+      const filePath = path.join(folder, 'blocked.json');
+      const cur = await readBlockedListRaw(me);
+      if (!cur.some((entry) => entry && entry.username === target)) {
+        cur.push({ username: target, blockedAt: new Date().toISOString() });
+        await writeJsonAtomic(filePath, { blocked: cur });
+      }
+      return { blocked: true, target };
+    });
+  }
+
+  async function unblockUser(username, targetUsername) {
+    const me = String(username || '').trim().toLowerCase();
+    const target = String(targetUsername || '').trim().toLowerCase();
+    const folder = userFolder(me);
+    if (!folder) return { blocked: false, target };
+    return withLock(`blocked:${me}`, async () => {
+      const filePath = path.join(folder, 'blocked.json');
+      const cur = await readBlockedListRaw(me);
+      const next = cur.filter((entry) => entry && entry.username !== target);
+      if (next.length !== cur.length) {
+        await writeJsonAtomic(filePath, { blocked: next });
+      }
+      return { blocked: false, target };
+    });
+  }
+
+  async function listBlockedUsers(username) {
+    const list = await readBlockedListRaw(username);
+    const out = [];
+    for (const entry of list) {
+      if (!entry || !entry.username) continue;
+      const u = await getUserByUsername(entry.username);
+      if (u) {
+        out.push({
+          ...toPublicUser(u),
+          blockedAt: entry.blockedAt || null
+        });
+      }
+    }
+    return out;
+  }
+
+  async function getBlockStatus(userA, userB) {
+    const a = String(userA || '').trim().toLowerCase();
+    const b = String(userB || '').trim().toLowerCase();
+    if (!a || !b || a === b) return { blockedByA: false, blockedByB: false, anyBlocked: false };
+    const [listA, listB] = await Promise.all([readBlockedListRaw(a), readBlockedListRaw(b)]);
+    const blockedByA = listA.some((e) => e && e.username === b);
+    const blockedByB = listB.some((e) => e && e.username === a);
+    return { blockedByA, blockedByB, anyBlocked: blockedByA || blockedByB };
+  }
+
+  async function createReport({ reporter, targetUsername, reason = 'spam', details = '', chatId = null }) {
+    const cleanReporter = String(reporter || '').trim().toLowerCase();
+    const cleanTarget = String(targetUsername || '').trim().toLowerCase();
+    if (!USERNAME_REGEX.test(cleanReporter) || !USERNAME_REGEX.test(cleanTarget) || cleanReporter === cleanTarget) {
+      const err = new Error('Invalid report target.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const report = {
+      id: `rpt_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+      reporter: cleanReporter,
+      targetUsername: cleanTarget,
+      reason: String(reason || 'spam').trim().slice(0, 48),
+      details: String(details || '').trim().slice(0, 500),
+      chatId: chatId || null,
+      createdAt: new Date().toISOString()
+    };
+    const reportsPath = path.join(config.dataDir, 'reports.jsonl');
+    await withLock('reports:log', async () => {
+      await fsp.mkdir(config.dataDir, { recursive: true });
+      await fsp.appendFile(reportsPath, `${JSON.stringify(report)}\n`, 'utf8');
+    });
+    return report;
   }
 
   async function authenticateUser(identifier, password) {
@@ -708,6 +1071,26 @@ function createStorage(config) {
     if (meta.lastMessage && meta.lastMessage.sender === oldUsername) {
       meta.lastMessage.sender = newUsername;
     }
+    if (Array.isArray(meta.hiddenFor)) {
+      meta.hiddenFor = meta.hiddenFor.map((u) => (u === oldUsername ? newUsername : u));
+    }
+    if (Array.isArray(meta.pinnedHiddenFor)) {
+      meta.pinnedHiddenFor = meta.pinnedHiddenFor.map((u) => (u === oldUsername ? newUsername : u));
+    }
+    if (meta.clearedBeforeByUser && Object.prototype.hasOwnProperty.call(meta.clearedBeforeByUser, oldUsername)) {
+      meta.clearedBeforeByUser[newUsername] = meta.clearedBeforeByUser[oldUsername];
+      delete meta.clearedBeforeByUser[oldUsername];
+    }
+    if (meta.lastMessageByUser && typeof meta.lastMessageByUser === 'object') {
+      if (Object.prototype.hasOwnProperty.call(meta.lastMessageByUser, oldUsername)) {
+        meta.lastMessageByUser[newUsername] = meta.lastMessageByUser[oldUsername];
+        delete meta.lastMessageByUser[oldUsername];
+      }
+      for (const key of Object.keys(meta.lastMessageByUser)) {
+        const lm = meta.lastMessageByUser[key];
+        if (lm && lm.sender === oldUsername) lm.sender = newUsername;
+      }
+    }
 
     const oldFilePrefix = `/api/chats/${oldChatId}/files/`;
     const newFilePrefix = `/api/chats/${newChatId}/files/`;
@@ -719,6 +1102,9 @@ function createStorage(config) {
       }
       if (Array.isArray(msg.readBy)) {
         msg.readBy = msg.readBy.map((u) => (u === oldUsername ? newUsername : u));
+      }
+      if (Array.isArray(msg.deletedFor)) {
+        msg.deletedFor = msg.deletedFor.map((u) => (u === oldUsername ? newUsername : u));
       }
       if (msg.reactions && typeof msg.reactions === 'object') {
         for (const emoji of Object.keys(msg.reactions)) {
@@ -788,7 +1174,21 @@ function createStorage(config) {
           throw err;
         }
 
-        await fsp.rename(oldFolder, newFolder);
+        if (fs.existsSync(newFolder)) {
+          await archiveDeletedProfileIfPresent(newFolder);
+          for (const lf of ['activity.log', 'universal.log']) {
+            const oldLog = path.join(newFolder, lf);
+            if (fs.existsSync(oldLog)) {
+              const prev = await fsp.readFile(oldLog, 'utf8').catch(() => '');
+              const cur = await fsp.readFile(path.join(oldFolder, lf), 'utf8').catch(() => '');
+              await fsp.writeFile(path.join(oldFolder, lf), `${prev}${prev && cur ? '\n' : ''}${cur}`, 'utf8');
+            }
+          }
+          await fsp.cp(oldFolder, newFolder, { recursive: true, force: true });
+          await fsp.rm(oldFolder, { recursive: true, force: true });
+        } else {
+          await fsp.rename(oldFolder, newFolder);
+        }
 
         const prevDisplay = user.displayName;
         user.username = newClean;
@@ -831,11 +1231,18 @@ function createStorage(config) {
             if (!meta || !Array.isArray(meta.participants) || !meta.participants.includes(oldClean)) return;
 
             const isDm = !meta.type || meta.type === 'dm';
+            const isSaved = meta.type === 'saved';
             const peer = meta.participants.find((p) => p !== oldClean) || newClean;
-            const newChatId = isDm ? getDmChatId(newClean, peer) : oldChatId;
+            const newChatId = isSaved ? getSavedChatId(newClean) : (isDm ? getDmChatId(newClean, peer) : oldChatId);
             const messages = (await readJson(messagesPath, [])) || [];
 
             replaceUsernameInChatData(meta, messages, oldClean, newClean, oldChatId, newChatId);
+            if (meta.pinnedMessage && meta.pinnedMessage.sender === oldClean) {
+              meta.pinnedMessage.sender = newClean;
+            }
+            if (meta.pinnedMessage && meta.pinnedMessage.pinnedBy === oldClean) {
+              meta.pinnedMessage.pinnedBy = newClean;
+            }
             await writeJsonAtomic(metaPath, meta);
             await writeJsonAtomic(messagesPath, messages);
             await fsp.appendFile(
@@ -850,6 +1257,21 @@ function createStorage(config) {
             }
             chatRenames.push({ oldChatId, newChatId });
           });
+        }
+
+        if (chatRenames.length > 0) {
+          const prefsPath = path.join(newFolder, 'chat_prefs.json');
+          const prefs = await readJson(prefsPath, null);
+          if (prefs) {
+            const renameMap = new Map(chatRenames.map((r) => [r.oldChatId, r.newChatId]));
+            if (Array.isArray(prefs.pinnedChats)) {
+              prefs.pinnedChats = prefs.pinnedChats.map((id) => renameMap.get(id) || id);
+            }
+            if (Array.isArray(prefs.mutedChats)) {
+              prefs.mutedChats = prefs.mutedChats.map((id) => renameMap.get(id) || id);
+            }
+            await writeJsonAtomic(prefsPath, prefs);
+          }
         }
 
         return {
@@ -876,36 +1298,22 @@ function createStorage(config) {
   async function searchUsers(query, excludeUsername = '') {
     const q = String(query || '').trim().toLowerCase();
     const exclude = String(excludeUsername || '').trim().toLowerCase();
+    // Hide all users from general browsing & partial searches: require exact username or email
+    if (!q) return [];
+    const unameQuery = q.startsWith('@') ? q.slice(1).trim() : q;
+    if (!unameQuery && !q) return [];
+
     const allUsers = await listAllUsers();
-
-    const candidates = allUsers.filter((u) => u.username !== exclude);
-    if (!q) {
-      return candidates
-        .sort((a, b) => a.username.localeCompare(b.username))
-        .slice(0, 30)
-        .map(toPublicUser);
-    }
-
-    const scored = [];
-    for (const u of candidates) {
+    const matches = [];
+    for (const u of allUsers) {
+      if (u.username === exclude) continue;
       const uname = u.username.toLowerCase();
       const email = u.email.toLowerCase();
-      const dname = (u.displayName || '').toLowerCase();
-
-      let score = 0;
-      if (uname === q || email === q) score = 100;
-      else if (uname.startsWith(q) || email.startsWith(q)) score = 75;
-      else if (dname.startsWith(q)) score = 60;
-      else if (uname.includes(q) || email.includes(q)) score = 40;
-      else if (dname.includes(q)) score = 20;
-
-      if (score > 0) {
-        scored.push({ score, user: u });
+      if (uname === unameQuery || email === q) {
+        matches.push(toPublicUser(u));
       }
     }
-
-    scored.sort((a, b) => b.score - a.score || a.user.username.localeCompare(b.user.username));
-    return scored.slice(0, 30).map((s) => toPublicUser(s.user));
+    return matches;
   }
 
   async function ensureChatFolder(userA, userB) {
@@ -968,15 +1376,172 @@ function createStorage(config) {
     return readJson(path.join(folder, 'meta.json'));
   }
 
+  function getSavedChatId(username) {
+    return `saved_${String(username || '').trim().toLowerCase()}`;
+  }
+
+  async function ensureSavedChatFolder(username) {
+    const clean = String(username || '').trim().toLowerCase();
+    const user = await getUserByUsername(clean);
+    if (!user) {
+      const err = new Error('User not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const chatId = getSavedChatId(clean);
+    const folder = chatFolder(chatId);
+    return withLock(`chat:${chatId}`, async () => {
+      await fsp.mkdir(path.join(folder, 'files'), { recursive: true });
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const logPath = path.join(folder, 'chat.log');
+
+      let meta = await readJson(metaPath);
+      if (!meta) {
+        const now = new Date().toISOString();
+        meta = {
+          id: chatId,
+          type: 'saved',
+          title: 'Saved Messages',
+          participants: [clean],
+          createdAt: now,
+          updatedAt: now,
+          lastMessage: null,
+          pinnedMessage: null,
+          unreadCounts: { [clean]: 0 }
+        };
+        await writeJsonAtomic(metaPath, meta);
+        await writeJsonAtomic(messagesPath, []);
+        await fsp.writeFile(logPath, `# VibeRoom Saved Messages for @${clean}\n# Created: ${now}\n`, 'utf8');
+      }
+      return meta;
+    });
+  }
+
+  async function getUserChatPrefs(username) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder) return { pinnedChats: [], mutedChats: [] };
+    const data = await readJson(path.join(folder, 'chat_prefs.json'), {});
+    return {
+      pinnedChats: Array.isArray(data && data.pinnedChats) ? data.pinnedChats : [],
+      mutedChats: Array.isArray(data && data.mutedChats) ? data.mutedChats : []
+    };
+  }
+
+  async function setUserChatPrefsBulk(username, chatIds, { pinned, muted } = {}) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder) {
+      const err = new Error('User not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+    const ids = Array.isArray(chatIds) ? chatIds.map(String).filter((id) => CHAT_ID_REGEX.test(id)) : [];
+    return withLock(`chatprefs:${clean}`, async () => {
+      const prefsPath = path.join(folder, 'chat_prefs.json');
+      const cur = await getUserChatPrefs(clean);
+      const pinnedSet = new Set(cur.pinnedChats);
+      const mutedSet = new Set(cur.mutedChats);
+      for (const id of ids) {
+        if (typeof pinned === 'boolean') {
+          if (pinned) pinnedSet.add(id);
+          else pinnedSet.delete(id);
+        }
+        if (typeof muted === 'boolean') {
+          if (muted) mutedSet.add(id);
+          else mutedSet.delete(id);
+        }
+      }
+      const next = {
+        pinnedChats: Array.from(pinnedSet),
+        mutedChats: Array.from(mutedSet)
+      };
+      await writeJsonAtomic(prefsPath, next);
+      return {
+        items: ids.map((id) => ({
+          chatId: id,
+          isPinned: pinnedSet.has(id),
+          isMuted: mutedSet.has(id)
+        })),
+        ...next
+      };
+    });
+  }
+
+  async function setUserChatPref(username, chatId, { pinned, muted } = {}) {
+    const res = await setUserChatPrefsBulk(username, [chatId], { pinned, muted });
+    const item = res.items[0] || { chatId, isPinned: false, isMuted: false };
+    return {
+      chatId: item.chatId,
+      isPinned: item.isPinned,
+      isMuted: item.isMuted,
+      pinnedChats: res.pinnedChats,
+      mutedChats: res.mutedChats
+    };
+  }
+
+  function isMessageHiddenForUser(msg, meta, username) {
+    if (Array.isArray(msg.deletedFor) && msg.deletedFor.includes(username)) {
+      return true;
+    }
+    const clearedIso = meta && meta.clearedBeforeByUser && meta.clearedBeforeByUser[username];
+    if (clearedIso && msg && msg.createdAt) {
+      if (new Date(msg.createdAt).getTime() <= new Date(clearedIso).getTime()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function getVisibleChatMeta(meta, username) {
+    if (!meta) return meta;
+    const pinnedHidden = Array.isArray(meta.pinnedHiddenFor) && meta.pinnedHiddenFor.includes(username);
+    const hasCustomLast = meta.lastMessageByUser && Object.prototype.hasOwnProperty.call(meta.lastMessageByUser, username);
+    return {
+      ...meta,
+      pinnedMessage: pinnedHidden ? null : (meta.pinnedMessage || null),
+      lastMessage: hasCustomLast ? meta.lastMessageByUser[username] : meta.lastMessage
+    };
+  }
+
   async function listChatsForUser(username) {
     const clean = String(username || '').trim().toLowerCase();
     const entries = await fsp.readdir(config.chatsDir, { withFileTypes: true });
+    const prefs = await getUserChatPrefs(clean);
+    const pinnedSet = new Set(prefs.pinnedChats);
+    const mutedSet = new Set(prefs.mutedChats);
     const chats = [];
 
     for (const entry of entries) {
       if (!entry.isDirectory() || !CHAT_ID_REGEX.test(entry.name)) continue;
       const meta = await readJson(path.join(config.chatsDir, entry.name, 'meta.json'));
       if (!meta || !Array.isArray(meta.participants) || !meta.participants.includes(clean)) {
+        continue;
+      }
+      if (Array.isArray(meta.hiddenFor) && meta.hiddenFor.includes(clean)) {
+        continue;
+      }
+
+      const visibleMeta = getVisibleChatMeta(meta, clean);
+      const isPinned = pinnedSet.has(meta.id);
+      const isMuted = mutedSet.has(meta.id);
+
+      if (meta.type === 'saved') {
+        chats.push({
+          id: meta.id,
+          type: 'saved',
+          title: 'Saved Messages',
+          participants: meta.participants,
+          peer: null,
+          isPinned: true,
+          isMuted,
+          pinnedMessage: visibleMeta.pinnedMessage,
+          createdAt: meta.createdAt,
+          updatedAt: meta.updatedAt,
+          lastMessage: visibleMeta.lastMessage,
+          unreadCount: 0
+        });
         continue;
       }
 
@@ -993,31 +1558,41 @@ function createStorage(config) {
           participants: meta.participants,
           memberCount: meta.participants.length,
           peer: null,
+          isPinned,
+          isMuted,
+          pinnedMessage: visibleMeta.pinnedMessage,
           createdAt: meta.createdAt,
           updatedAt: meta.updatedAt,
-          lastMessage: meta.lastMessage,
+          lastMessage: visibleMeta.lastMessage,
           unreadCount: (meta.unreadCounts && meta.unreadCounts[clean]) || 0
         });
         continue;
       }
 
       const peerUsername = meta.participants.find((p) => p !== clean) || clean;
-      const peer = toPublicUser(await getUserByUsername(peerUsername));
-      if (!peer) continue;
+      const peerProfile = await getRawProfile(peerUsername);
+      if (!peerProfile) continue;
+      const peer = toPublicUser(peerProfile);
 
       chats.push({
         id: meta.id,
         type: meta.type || 'dm',
         participants: meta.participants,
         peer,
+        isPinned,
+        isMuted,
+        pinnedMessage: visibleMeta.pinnedMessage,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
-        lastMessage: meta.lastMessage,
+        lastMessage: visibleMeta.lastMessage,
         unreadCount: (meta.unreadCounts && meta.unreadCounts[clean]) || 0
       });
     }
 
-    chats.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    chats.sort((a, b) => {
+      if (Boolean(a.isPinned) !== Boolean(b.isPinned)) return a.isPinned ? -1 : 1;
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
     return chats;
   }
 
@@ -1029,11 +1604,41 @@ function createStorage(config) {
       throw err;
     }
     const folder = chatFolder(chatId);
-    const messages = (await readJson(path.join(folder, 'messages.json'), [])) || [];
-    return { meta, messages };
+    const allMessages = (await readJson(path.join(folder, 'messages.json'), [])) || [];
+    const messages = allMessages.filter((m) => !isMessageHiddenForUser(m, meta, username));
+    return { meta: getVisibleChatMeta(meta, username), messages };
   }
 
-  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', game = null, call = null, allowChannelSystem = false }) {
+  function buildLastMessageSummary(msg) {
+    if (!msg) return null;
+    const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+    let preview = '';
+    if (msg.game) {
+      preview = `🎮 ${msg.game.title || msg.game.type}`;
+    } else if (msg.call) {
+      const icon = msg.call.mode === 'video' ? '📹 Video call' : '📞 Audio call';
+      if (msg.call.status === 'missed') preview = `${icon} • Missed`;
+      else if (msg.call.status === 'declined') preview = `${icon} • Declined`;
+      else if (msg.call.status === 'cancelled') preview = `${icon} • Cancelled`;
+      else preview = msg.call.durationSec > 0 ? `${icon} • ${Math.floor(msg.call.durationSec / 60)}:${String(msg.call.durationSec % 60).padStart(2, '0')}` : icon;
+    } else if (msg.text) {
+      preview = msg.text.slice(0, 80);
+    } else if (atts[0]) {
+      if (atts[0].isImage) preview = '📷 Photo';
+      else if (atts[0].mimeType && atts[0].mimeType.startsWith('audio/')) preview = '🎤 Voice message';
+      else preview = `📎 ${atts[0].originalName}`;
+    }
+    return {
+      id: msg.id,
+      sender: msg.sender,
+      preview,
+      hasImage: atts.some((a) => a.isImage),
+      hasFile: atts.some((a) => !a.isImage),
+      createdAt: msg.createdAt
+    };
+  }
+
+  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', game = null, call = null, forwardedFrom = null, linkPreview = null, allowChannelSystem = false }) {
     const folder = chatFolder(chatId);
     if (!folder) {
       const err = new Error('Invalid chat ID.');
@@ -1118,6 +1723,8 @@ function createStorage(config) {
         mentions,
         attachments,
         replyTo: replySnapshot,
+        forwardedFrom: forwardedFrom || undefined,
+        linkPreview: linkPreview || undefined,
         game: game || undefined,
         call: call || undefined,
         reactions: {},
@@ -1135,30 +1742,15 @@ function createStorage(config) {
       const logLine = `[${now}] ${senderUsername}: ${cleanText.replace(/\r?\n/g, ' ')}${attachmentNote}\n`;
       await fsp.appendFile(logPath, logLine, 'utf8');
 
-      // Update meta
+      // Update meta & revive chat visibility for participants on new activity
       meta.updatedAt = now;
-      let previewText = '';
-      if (game) {
-        previewText = `🎮 ${game.title || game.type}`;
-      } else if (call) {
-        const icon = call.mode === 'video' ? '📹 Video call' : '📞 Audio call';
-        if (call.status === 'missed') previewText = `${icon} • Missed`;
-        else if (call.status === 'declined') previewText = `${icon} • Declined`;
-        else if (call.status === 'cancelled') previewText = `${icon} • Cancelled`;
-        else previewText = call.durationSec > 0 ? `${icon} • ${Math.floor(call.durationSec / 60)}:${String(call.durationSec % 60).padStart(2, '0')}` : icon;
-      } else if (cleanText) {
-        previewText = cleanText.slice(0, 80);
-      } else {
-        previewText = attachments[0].isImage ? '📷 Photo' : `📎 ${attachments[0].originalName}`;
+      meta.lastMessage = buildLastMessageSummary(message);
+      if (Array.isArray(meta.hiddenFor) && meta.hiddenFor.length > 0) {
+        meta.hiddenFor = [];
       }
-      meta.lastMessage = {
-        id: message.id,
-        sender: senderUsername,
-        preview: previewText,
-        hasImage: attachments.some((a) => a.isImage),
-        hasFile: attachments.some((a) => !a.isImage),
-        createdAt: now
-      };
+      if (meta.lastMessageByUser) {
+        delete meta.lastMessageByUser;
+      }
       meta.unreadCounts = meta.unreadCounts || {};
       const markUnreadForPeer = !call || call.status === 'missed';
       if (markUnreadForPeer) {
@@ -1264,9 +1856,107 @@ function createStorage(config) {
     });
   }
 
-  async function deleteMessage(chatId, messageId, username) {
+  async function editMessage(chatId, messageId, username, newText) {
+    const cleanText = typeof newText === 'string' ? newText.trim().slice(0, 4000) : '';
+    if (!cleanText) {
+      const err = new Error('Edited message text cannot be empty.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    return mutateChatMessages(chatId, async ({ meta, messages, folder }) => {
+      if (!meta.participants.includes(username)) {
+        const err = new Error('Chat not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg) return null;
+      if (msg.sender !== username) {
+        const err = new Error('You can only edit your own messages.');
+        err.statusCode = 403;
+        throw err;
+      }
+      if (msg.kind === 'game' || msg.kind === 'call' || msg.kind === 'system') {
+        const err = new Error('This message type cannot be edited.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const now = new Date().toISOString();
+      msg.text = cleanText;
+      msg.mentions = extractMentions(cleanText);
+      msg.editedAt = now;
+
+      let saveMeta = false;
+      if (meta.lastMessage && meta.lastMessage.id === msg.id) {
+        meta.lastMessage = buildLastMessageSummary(msg);
+        saveMeta = true;
+      }
+      if (meta.pinnedMessage && meta.pinnedMessage.id === msg.id) {
+        meta.pinnedMessage.preview = cleanText.slice(0, 120);
+        saveMeta = true;
+      }
+
+      const logPath = path.join(folder, 'chat.log');
+      await fsp.appendFile(logPath, `[${now}] SYSTEM: ${username} edited message ${messageId}\n`, 'utf8').catch(() => {});
+      return { message: msg, saveMessages: true, saveMeta };
+    });
+  }
+
+  async function setMessageLinkPreview(chatId, messageId, linkPreview) {
+    if (!linkPreview) return null;
+    return mutateChatMessages(chatId, ({ messages }) => {
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg) return null;
+      msg.linkPreview = linkPreview;
+      return { message: msg, saveMessages: true, saveMeta: false };
+    });
+  }
+
+  async function pinMessage(chatId, messageId, username, unpin = false) {
     const folder = chatFolder(chatId);
     if (!folder) return null;
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const meta = await readJson(metaPath);
+      if (!meta || !meta.participants.includes(username)) return null;
+      if (meta.type === 'channel' && (!Array.isArray(meta.admins) || !meta.admins.includes(username))) {
+        const err = new Error('Only channel admins can pin or unpin messages.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      if (unpin || !messageId) {
+        meta.pinnedMessage = null;
+        meta.pinnedHiddenFor = [];
+        await writeJsonAtomic(metaPath, meta);
+        return { pinnedMessage: null, meta };
+      }
+
+      const messages = (await readJson(messagesPath, [])) || [];
+      const target = messages.find((m) => m.id === messageId);
+      if (!target) return null;
+      const summary = buildLastMessageSummary(target);
+      meta.pinnedHiddenFor = [];
+      meta.pinnedMessage = {
+        id: target.id,
+        sender: target.sender,
+        preview: (target.text ? target.text.slice(0, 120) : (summary ? summary.preview : 'Pinned message')),
+        pinnedBy: username,
+        pinnedAt: new Date().toISOString()
+      };
+      await writeJsonAtomic(metaPath, meta);
+      return { pinnedMessage: meta.pinnedMessage, meta };
+    });
+  }
+
+  async function bulkDeleteMessages(chatId, messageIds, username, { forEveryone = true } = {}) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+    const idSet = new Set(Array.isArray(messageIds) ? messageIds.map(String) : []);
+    if (idSet.size === 0) return null;
 
     return withLock(`chat:${chatId}`, async () => {
       const metaPath = path.join(folder, 'meta.json');
@@ -1277,52 +1967,316 @@ function createStorage(config) {
       if (!meta || !meta.participants.includes(username)) return null;
 
       const messages = (await readJson(messagesPath, [])) || [];
-      const idx = messages.findIndex((m) => m.id === messageId);
-      if (idx < 0) return null;
+      const deletedIds = [];
+      const forEveryoneIds = [];
+      const deletedForMeIds = [];
+      const kept = [];
+      const isChannelAdmin = meta.type === 'channel' && Array.isArray(meta.admins) && meta.admins.includes(username);
 
-      const target = messages[idx];
-      if (target.sender !== username) {
-        const err = new Error('You can only delete your own messages.');
-        err.statusCode = 403;
-        throw err;
-      }
+      for (const target of messages) {
+        if (!idSet.has(target.id)) {
+          kept.push(target);
+          continue;
+        }
 
-      // Remove uploaded files attached to this message
-      if (Array.isArray(target.attachments)) {
-        for (const att of target.attachments) {
-          const filePath = path.join(folder, 'files', path.basename(att.storedName));
-          await fsp.unlink(filePath).catch(() => {});
+        const isOwner = target.sender === username || isChannelAdmin;
+        const shouldRemoveGlobally = Boolean(forEveryone) && isOwner;
+
+        if (forEveryone && !isOwner && idSet.size === 1) {
+          const err = new Error('You can only delete your own messages for everyone.');
+          err.statusCode = 403;
+          throw err;
+        }
+
+        if (shouldRemoveGlobally) {
+          if (Array.isArray(target.attachments)) {
+            for (const att of target.attachments) {
+              const filePath = path.join(folder, 'files', path.basename(att.storedName));
+              await fsp.unlink(filePath).catch(() => {});
+            }
+          }
+          deletedIds.push(target.id);
+          forEveryoneIds.push(target.id);
+        } else {
+          if (!Array.isArray(target.deletedFor)) target.deletedFor = [];
+          if (!target.deletedFor.includes(username)) {
+            target.deletedFor.push(username);
+          }
+          const allDeletedForAll = Array.isArray(meta.participants) &&
+            meta.participants.length > 0 &&
+            meta.participants.every((p) => target.deletedFor.includes(p));
+          if (allDeletedForAll) {
+            if (Array.isArray(target.attachments)) {
+              for (const att of target.attachments) {
+                const filePath = path.join(folder, 'files', path.basename(att.storedName));
+                await fsp.unlink(filePath).catch(() => {});
+              }
+            }
+          } else {
+            kept.push(target);
+          }
+          deletedIds.push(target.id);
+          deletedForMeIds.push(target.id);
         }
       }
 
-      messages.splice(idx, 1);
-      await writeJsonAtomic(messagesPath, messages);
-      await fsp.appendFile(logPath, `[${new Date().toISOString()}] SYSTEM: ${username} deleted message ${messageId}\n`, 'utf8');
+      if (deletedIds.length === 0) return null;
 
-      // Recompute lastMessage
-      const last = messages[messages.length - 1];
-      if (last) {
-        const preview = last.text
-          ? last.text.slice(0, 80)
-          : (last.attachments && last.attachments[0]
-            ? (last.attachments[0].isImage ? '📷 Photo' : `📎 ${last.attachments[0].originalName}`)
-            : '');
-        meta.lastMessage = {
-          id: last.id,
-          sender: last.sender,
-          preview,
-          hasImage: (last.attachments || []).some((a) => a.isImage),
-          hasFile: (last.attachments || []).some((a) => !a.isImage),
-          createdAt: last.createdAt
-        };
-      } else {
-        meta.lastMessage = null;
+      await writeJsonAtomic(messagesPath, kept);
+      await fsp.appendFile(
+        logPath,
+        `[${new Date().toISOString()}] SYSTEM: ${username} deleted ${deletedIds.length} message(s) (${forEveryoneIds.length} for everyone, ${deletedForMeIds.length} for self)\n`,
+        'utf8'
+      ).catch(() => {});
+
+      const last = kept[kept.length - 1];
+      meta.lastMessage = buildLastMessageSummary(last);
+
+      if (deletedForMeIds.length > 0) {
+        meta.lastMessageByUser = meta.lastMessageByUser || {};
+        const visibleForUser = kept.filter((m) => !isMessageHiddenForUser(m, meta, username));
+        meta.lastMessageByUser[username] = buildLastMessageSummary(visibleForUser[visibleForUser.length - 1]);
+      } else if (meta.lastMessageByUser && forEveryoneIds.length > 0) {
+        for (const p of meta.participants) {
+          const visibleForP = kept.filter((m) => !isMessageHiddenForUser(m, meta, p));
+          meta.lastMessageByUser[p] = buildLastMessageSummary(visibleForP[visibleForP.length - 1]);
+        }
       }
+
+      if (meta.pinnedMessage && forEveryoneIds.includes(meta.pinnedMessage.id)) {
+        meta.pinnedMessage = null;
+      } else if (meta.pinnedMessage && deletedForMeIds.includes(meta.pinnedMessage.id)) {
+        if (!Array.isArray(meta.pinnedHiddenFor)) meta.pinnedHiddenFor = [];
+        if (!meta.pinnedHiddenFor.includes(username)) meta.pinnedHiddenFor.push(username);
+      }
+
       meta.updatedAt = new Date().toISOString();
       await writeJsonAtomic(metaPath, meta);
 
-      return { deletedId: messageId, meta };
+      return { deletedIds, forEveryoneIds, deletedForMeIds, meta };
     });
+  }
+
+  async function deleteMessage(chatId, messageId, username, opts = {}) {
+    const res = await bulkDeleteMessages(chatId, [messageId], username, opts);
+    if (!res) return null;
+    return {
+      deletedId: res.deletedIds[0],
+      forEveryone: res.forEveryoneIds.includes(res.deletedIds[0]),
+      meta: res.meta
+    };
+  }
+
+  async function removeChatFromUserPrefs(username, chatId) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder) return;
+    await withLock(`chatprefs:${clean}`, async () => {
+      const prefsPath = path.join(folder, 'chat_prefs.json');
+      const cur = await getUserChatPrefs(clean);
+      const pinnedChats = cur.pinnedChats.filter((id) => id !== chatId);
+      const mutedChats = cur.mutedChats.filter((id) => id !== chatId);
+      if (pinnedChats.length !== cur.pinnedChats.length || mutedChats.length !== cur.mutedChats.length) {
+        await writeJsonAtomic(prefsPath, { pinnedChats, mutedChats });
+      }
+    });
+  }
+
+  async function deleteChatForUser(chatId, username, { forEveryone = false } = {}) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+
+    const outcome = await withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const logPath = path.join(folder, 'chat.log');
+
+      const meta = await readJson(metaPath);
+      if (!meta || !Array.isArray(meta.participants) || !meta.participants.includes(username)) {
+        return null;
+      }
+
+      const participantsSnapshot = meta.participants.slice();
+      const isRoom = meta.type === 'group' || meta.type === 'channel';
+      const isSaved = meta.type === 'saved';
+
+      if (isSaved) {
+        await fsp.rm(folder, { recursive: true, force: true });
+        return {
+          chatId,
+          forEveryone: false,
+          removed: true,
+          participantsToClean: [username],
+          notifiedUsers: [username]
+        };
+      }
+
+      if (isRoom) {
+        if (forEveryone) {
+          const isRoomAdmin = meta.createdBy === username || (Array.isArray(meta.admins) && meta.admins.includes(username));
+          if (!isRoomAdmin) {
+            const err = new Error('Only group/channel admins can delete this room for everyone.');
+            err.statusCode = 403;
+            throw err;
+          }
+          await fsp.rm(folder, { recursive: true, force: true });
+          return {
+            chatId,
+            forEveryone: true,
+            removed: true,
+            participantsToClean: participantsSnapshot,
+            notifiedUsers: participantsSnapshot
+          };
+        }
+
+        // Delete for self in room = leave room
+        meta.participants = meta.participants.filter((p) => p !== username);
+        if (Array.isArray(meta.admins)) {
+          meta.admins = meta.admins.filter((a) => a !== username);
+        }
+        if (meta.participants.length === 0) {
+          await fsp.rm(folder, { recursive: true, force: true });
+        } else {
+          meta.updatedAt = new Date().toISOString();
+          await writeJsonAtomic(metaPath, meta);
+        }
+        return {
+          chatId,
+          forEveryone: false,
+          removed: true,
+          participantsToClean: [username],
+          notifiedUsers: [username],
+          roomRemainingUsers: meta.participants.slice(),
+          meta
+        };
+      }
+
+      // Direct message
+      if (forEveryone) {
+        await fsp.rm(folder, { recursive: true, force: true });
+        return {
+          chatId,
+          forEveryone: true,
+          removed: true,
+          participantsToClean: participantsSnapshot,
+          notifiedUsers: participantsSnapshot
+        };
+      }
+
+      // DM delete for self only: hide from sidebar and clear history prior to now
+      const now = new Date().toISOString();
+      if (!Array.isArray(meta.hiddenFor)) meta.hiddenFor = [];
+      if (!meta.hiddenFor.includes(username)) meta.hiddenFor.push(username);
+      meta.clearedBeforeByUser = meta.clearedBeforeByUser || {};
+      meta.clearedBeforeByUser[username] = now;
+      meta.lastMessageByUser = meta.lastMessageByUser || {};
+      meta.lastMessageByUser[username] = null;
+      meta.unreadCounts = meta.unreadCounts || {};
+      meta.unreadCounts[username] = 0;
+      if (meta.pinnedMessage) {
+        if (!Array.isArray(meta.pinnedHiddenFor)) meta.pinnedHiddenFor = [];
+        if (!meta.pinnedHiddenFor.includes(username)) meta.pinnedHiddenFor.push(username);
+      }
+
+      const everyoneHid = participantsSnapshot.every((p) => meta.hiddenFor.includes(p));
+      if (everyoneHid) {
+        await fsp.rm(folder, { recursive: true, force: true });
+      } else {
+        await writeJsonAtomic(metaPath, meta);
+        await fsp.appendFile(logPath, `[${now}] SYSTEM: ${username} cleared & removed chat for self\n`, 'utf8').catch(() => {});
+        const messages = (await readJson(messagesPath, [])) || [];
+        let cleanedMsgs = 0;
+        const nextMsgs = messages.filter((m) => {
+          const allCleared = participantsSnapshot.every((p) => isMessageHiddenForUser(m, meta, p));
+          if (allCleared) cleanedMsgs++;
+          return !allCleared;
+        });
+        if (cleanedMsgs > 0) {
+          await writeJsonAtomic(messagesPath, nextMsgs);
+        }
+      }
+
+      return {
+        chatId,
+        forEveryone: false,
+        removed: true,
+        participantsToClean: [username],
+        notifiedUsers: [username]
+      };
+    });
+
+    if (!outcome) return null;
+    for (const u of outcome.participantsToClean) {
+      await removeChatFromUserPrefs(u, chatId);
+    }
+    return outcome;
+  }
+
+  async function bulkDeleteChats(chatIds, username, { forEveryone = false } = {}) {
+    const ids = Array.isArray(chatIds) ? chatIds.map(String).filter((id) => CHAT_ID_REGEX.test(id)) : [];
+    const results = [];
+    for (const chatId of ids) {
+      const res = await deleteChatForUser(chatId, username, { forEveryone });
+      if (res) results.push(res);
+    }
+    return results;
+  }
+
+  async function forwardMessages({ fromChatId, messageIds, targetChatId, senderUsername }) {
+    const srcFolder = chatFolder(fromChatId);
+    const dstFolder = chatFolder(targetChatId);
+    if (!srcFolder || !dstFolder) {
+      const err = new Error('Invalid chat ID.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const srcData = await getMessages(fromChatId, senderUsername);
+    const idSet = new Set(Array.isArray(messageIds) ? messageIds.map(String) : []);
+    const selected = srcData.messages.filter((m) => idSet.has(m.id));
+    if (selected.length === 0) {
+      const err = new Error('No messages selected to forward.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const srcTitle = srcData.meta.title || (srcData.meta.type === 'saved' ? 'Saved Messages' : null);
+    const created = [];
+
+    for (const orig of selected) {
+      const filesToCopy = [];
+      if (Array.isArray(orig.attachments)) {
+        for (const att of orig.attachments) {
+          const srcFilePath = await getChatFilePath(fromChatId, att.storedName, senderUsername);
+          if (srcFilePath) {
+            const data = await fsp.readFile(srcFilePath).catch(() => null);
+            if (data) {
+              filesToCopy.push({
+                filename: att.originalName || 'file',
+                mimeType: att.mimeType || 'application/octet-stream',
+                data
+              });
+            }
+          }
+        }
+      }
+
+      const fwdText = orig.text || (orig.game ? `🎮 ${orig.game.title}` : '');
+      if (!fwdText && filesToCopy.length === 0) continue;
+
+      const { message, meta } = await appendChatMessage(targetChatId, senderUsername, {
+        text: fwdText,
+        files: filesToCopy,
+        linkPreview: orig.linkPreview || null,
+        forwardedFrom: {
+          sender: orig.sender,
+          chatTitle: srcTitle
+        }
+      });
+      created.push({ message, meta });
+    }
+
+    return created;
   }
 
   async function getChatFilePath(chatId, storedName, username) {
@@ -1344,7 +2298,9 @@ function createStorage(config) {
     CHAT_ID_REGEX,
     AVATAR_GRADIENTS,
     getDmChatId,
+    getSavedChatId,
     withLock,
+    userFolder,
     chatFolder,
     readJson,
     writeJsonAtomic,
@@ -1357,6 +2313,19 @@ function createStorage(config) {
     resendPendingRegistration,
     verifyPendingRegistration,
     authenticateUser,
+    resendOtpSession: resendPendingRegistration,
+    createPasswordResetRequest,
+    resetPasswordWithOtp,
+    changeUserPassword,
+    createDeleteAccountOtp,
+    confirmDeleteAccount,
+    updateUserPrivacy,
+    blockUser,
+    unblockUser,
+    listBlockedUsers,
+    getBlockStatus,
+    createReport,
+    getRawProfile,
     updateLastSeen,
     updateUserProfile,
     updateAccountProfile,
@@ -1365,13 +2334,24 @@ function createStorage(config) {
     getUserAvatarPath,
     searchUsers,
     ensureChatFolder,
+    ensureSavedChatFolder,
+    getUserChatPrefs,
+    setUserChatPref,
+    setUserChatPrefsBulk,
     getChatMeta,
     listChatsForUser,
     getMessages,
     appendChatMessage,
+    editMessage,
+    setMessageLinkPreview,
+    pinMessage,
     markChatRead,
     toggleReaction,
     deleteMessage,
+    bulkDeleteMessages,
+    deleteChatForUser,
+    bulkDeleteChats,
+    forwardMessages,
     getChatFilePath
   };
 }

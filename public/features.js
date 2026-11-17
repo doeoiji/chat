@@ -92,9 +92,7 @@
     const bodyEl = el('group-modal-body');
     if (!bodyEl || !core()) return;
     const state = core().getState();
-    const dmPeers = (state.chats || [])
-      .filter((c) => c.peer && c.peer.username && c.peer.username !== getMyUsername())
-      .map((c) => c.peer);
+    const friendsList = Array.isArray(state.friends) ? state.friends : [];
 
     if (titleEl) {
       titleEl.textContent = groupModalTab === 'join' ? 'Join via Invite' : 'New Group / Channel';
@@ -167,17 +165,18 @@
           <input id="grp-desc-input" type="text" maxlength="200" placeholder="What is this room about?" />
         </div>
         <div class="field-group">
-          <label for="grp-member-add">Add Members by @username</label>
+          <label for="grp-member-add">Add Friends by @username</label>
           <div class="vr-inline-row">
-            <input id="grp-member-add" type="text" placeholder="Type @username and click Add" />
+            <input id="grp-member-add" type="text" placeholder="Type friend's @username and click Add" />
             <button type="button" id="grp-member-add-btn" class="secondary-btn">Add</button>
           </div>
+          <p class="vr-hint" style="margin-top:4px;">Only friends can be added directly. Anyone else can join anytime via the invite link.</p>
           <div id="grp-selected-chips" class="vr-chips-wrap"></div>
-          ${dmPeers.length > 0 ? `
+          ${friendsList.length > 0 ? `
             <div class="vr-quick-peers">
-              <span class="vr-sub-label">Quick pick from DMs:</span>
+              <span class="vr-sub-label">Quick pick from Friends:</span>
               <div class="vr-chips-wrap">
-                ${dmPeers.slice(0, 12).map((p) => `
+                ${friendsList.slice(0, 12).map((p) => `
                   <button type="button" class="vr-chip-btn ${selectedGroupMembers.has(p.username) ? 'selected' : ''}" data-grp-pick="${esc(p.username)}">
                     @${esc(p.username)}
                   </button>
@@ -1092,17 +1091,19 @@
     const activeChatId = state.activeChatId;
     const existingGames = (state.messages || []).filter((m) => m.kind === 'game' && m.game).map((m) => m.game).reverse();
 
+    const friendsList = Array.isArray(state.friends) ? state.friends : [];
+    const friendSet = new Set(friendsList.map((f) => f.username));
+
     if (!activeChatId) {
-      const dmChats = (state.chats || []).filter((c) => c.peer);
       bodyEl.innerHTML = `
         <div class="vr-stack">
-          <p class="vr-hint">Pick a chat first to challenge someone to Tic-Tac-Toe, Connect 4, Chess, or Word Duel:</p>
-          ${dmChats.length === 0
-            ? '<div class="vr-hint centered">No active chats yet — search for a user in the sidebar to start playing!</div>'
-            : `<div class="vr-member-list">${dmChats.slice(0, 8).map((c) => `
-                <button type="button" class="vr-pick-chat-btn" data-game-open-chat="${esc(c.peer.username)}">
-                  <span>💬 ${esc(c.peer.displayName || c.peer.username)}</span>
-                  <span class="vr-hint">@${esc(c.peer.username)}</span>
+          <p class="vr-hint">Pick a friend to challenge them to Tic-Tac-Toe, Connect 4, Chess, or Word Duel:</p>
+          ${friendsList.length === 0
+            ? '<div class="vr-hint centered">No friends added yet — search someone by exact @username or email in the sidebar and add them first!</div>'
+            : `<div class="vr-member-list">${friendsList.slice(0, 12).map((f) => `
+                <button type="button" class="vr-pick-chat-btn" data-game-open-chat="${esc(f.username)}">
+                  <span>💬 ${esc(f.displayName || f.username)}</span>
+                  <span class="vr-hint">@${esc(f.username)}</span>
                 </button>
               `).join('')}</div>`
           }
@@ -1113,14 +1114,52 @@
 
     const isRoom = Boolean(state.activeRoom);
     const otherMembers = isRoom
-      ? getRoomMemberProfiles(state.activeRoom).map((m) => m.username).filter((u) => u && u !== getMyUsername())
+      ? getRoomMemberProfiles(state.activeRoom).map((m) => m.username).filter((u) => u && u !== getMyUsername() && friendSet.has(u))
       : [];
+    const dmNotFriend = !isRoom && state.activePeer && !friendSet.has(state.activePeer.username);
+
+    if (dmNotFriend) {
+      const peerRel = core().getRelationshipForUser ? core().getRelationshipForUser(state.activePeer.username) : 'none';
+      bodyEl.innerHTML = `
+        <div class="vr-stack">
+          <div class="vr-lounge-hero">
+            <div class="vr-lounge-icon">🎮</div>
+            <div>
+              <strong>Friends Only</strong>
+              <p class="vr-hint">You can only play mini-games with friends. Add <strong>@${esc(state.activePeer.username)}</strong> as a friend first!</p>
+            </div>
+          </div>
+          ${peerRel === 'outgoing_pending'
+            ? '<div class="vr-hint centered">Friend request already sent — waiting for acceptance.</div>'
+            : (peerRel === 'incoming_pending'
+              ? `<button type="button" class="primary-btn full-width" data-game-accept-friend="${esc(state.activePeer.username)}">Accept @${esc(state.activePeer.username)}'s Friend Request</button>`
+              : `<button type="button" class="primary-btn full-width" data-game-add-friend="${esc(state.activePeer.username)}">+ Add @${esc(state.activePeer.username)} as Friend</button>`)
+          }
+        </div>
+      `;
+      return;
+    }
+
+    if (isRoom && otherMembers.length === 0) {
+      bodyEl.innerHTML = `
+        <div class="vr-stack">
+          <div class="vr-lounge-hero">
+            <div class="vr-lounge-icon">🎮</div>
+            <div>
+              <strong>No Friend Opponents in Room</strong>
+              <p class="vr-hint">You can only challenge friends to mini-games. Add a friend to this group or open a DM with a friend to play.</p>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
 
     bodyEl.innerHTML = `
       <div class="vr-stack">
         ${isRoom && otherMembers.length > 0 ? `
           <div class="field-group">
-            <label for="game-opponent-select">Challenge Player</label>
+            <label for="game-opponent-select">Challenge Friend</label>
             <select id="game-opponent-select" class="vr-select">
               ${otherMembers.map((u) => `<option value="${esc(u)}">@${esc(u)}</option>`).join('')}
             </select>
@@ -1341,6 +1380,18 @@
 
   async function handleGamesBodyClick(e) {
     if (!core()) return;
+    const addFriendBtn = e.target.closest('[data-game-add-friend]');
+    if (addFriendBtn && typeof core().performFriendAction === 'function') {
+      await core().performFriendAction('request', addFriendBtn.dataset.gameAddFriend);
+      renderGamesModal();
+      return;
+    }
+    const acceptFriendBtn = e.target.closest('[data-game-accept-friend]');
+    if (acceptFriendBtn && typeof core().performFriendAction === 'function') {
+      await core().performFriendAction('accept', acceptFriendBtn.dataset.gameAcceptFriend);
+      renderGamesModal();
+      return;
+    }
     const cancelBtn = e.target.closest('[data-cancel-game]');
     if (cancelBtn) {
       await cancelGameById(cancelBtn.dataset.cancelGame, fState.activeGameChatId);
