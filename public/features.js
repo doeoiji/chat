@@ -948,26 +948,100 @@
     const g = msg && msg.game;
     if (!g) return '';
     const me = getMyUsername();
+    const creator = g.creator || (Array.isArray(g.players) ? g.players[0] : '');
+    const canCancel = g.status === 'active' && creator === me;
     const myTurn = g.status === 'active' && g.turn === me;
-    const statusText = g.status === 'finished'
-      ? (g.draw ? 'Draw!' : `Winner: @${g.winner}`)
-      : (myTurn ? 'Your Turn!' : `Turn: @${g.turn}`);
+    let statusText = myTurn ? 'Your Turn!' : `Turn: @${g.turn}`;
+    let pillCls = myTurn ? 'yours' : '';
+    if (g.status === 'finished') {
+      statusText = g.draw ? 'Draw!' : `Winner: @${g.winner}`;
+      pillCls = 'done';
+    } else if (g.status === 'cancelled') {
+      statusText = 'Cancelled';
+      pillCls = 'cancelled';
+    }
     const emojiMap = { tictactoe: '⭕', connect4: '🔴', chess: '♟️', wordguess: '🔤' };
     const icon = emojiMap[g.type] || '🎮';
 
     return `
-      <div class="game-card-msg ${myTurn ? 'my-turn' : ''}" data-open-game="${esc(g.id)}">
+      <div class="game-card-msg ${myTurn ? 'my-turn' : ''} ${g.status === 'cancelled' ? 'is-cancelled' : ''}" data-open-game="${esc(g.id)}">
         <div class="game-card-head">
           <span class="game-card-icon">${icon}</span>
           <div class="game-card-titles">
             <div class="game-card-title">${esc(g.title || g.type)}</div>
             <div class="game-card-players">${(g.players || []).map((p) => `@${esc(p)}`).join(' vs ')}</div>
           </div>
-          <span class="game-status-pill ${g.status === 'finished' ? 'done' : (myTurn ? 'yours' : '')}">${esc(statusText)}</span>
+          <span class="game-status-pill ${pillCls}">${esc(statusText)}</span>
         </div>
-        <div class="game-card-cta">${g.status === 'active' ? 'Tap to play →' : 'View board →'}</div>
+        <div class="game-card-footer">
+          <span class="game-card-cta">${g.status === 'active' ? 'Tap to play →' : (g.status === 'cancelled' ? 'Invite cancelled' : 'View board →')}</span>
+          ${canCancel ? `<button type="button" class="game-cancel-btn" data-cancel-game="${esc(g.id)}">Cancel</button>` : ''}
+        </div>
       </div>
     `;
+  }
+
+  function renderCallBubbleHtml(msg) {
+    const c = msg && msg.call;
+    if (!c) return '';
+    const me = getMyUsername();
+    const isOutgoing = c.caller === me;
+    const isVideo = c.mode === 'video';
+    const isMissedOrDeclined = c.status === 'missed' || c.status === 'declined' || c.status === 'cancelled';
+
+    let headline = `${isOutgoing ? 'Outgoing' : 'Incoming'} ${isVideo ? 'Video' : 'Audio'} Call`;
+    let sub = '';
+    if (c.status === 'completed') {
+      const m = Math.floor((c.durationSec || 0) / 60);
+      const s = String((c.durationSec || 0) % 60).padStart(2, '0');
+      sub = `Duration ${m}:${s}`;
+    } else if (c.status === 'missed') {
+      headline = isOutgoing ? `Cancelled / No Answer` : `Missed ${isVideo ? 'Video' : 'Audio'} Call`;
+      sub = isOutgoing ? 'Unanswered' : 'Tap to call back';
+    } else if (c.status === 'declined') {
+      sub = 'Declined';
+    } else {
+      sub = 'Cancelled';
+    }
+
+    return `
+      <div class="call-log-msg ${isMissedOrDeclined && !isOutgoing ? 'missed' : ''}">
+        <span class="call-log-icon">${isVideo ? '📹' : '📞'}</span>
+        <div class="call-log-meta">
+          <div class="call-log-title">${esc(headline)}</div>
+          <div class="call-log-sub">${esc(sub)}</div>
+        </div>
+        <button type="button" class="call-log-back-btn" data-call-back="${esc(c.mode || 'audio')}" title="Call back" aria-label="Call back">
+          ${isVideo ? '📹' : '📞'}
+        </button>
+      </div>
+    `;
+  }
+
+  async function cancelGameById(gameId, chatId) {
+    if (!core() || !gameId) return;
+    const targetChatId = chatId || fState.activeGameChatId || core().getState().activeChatId;
+    if (!targetChatId) return;
+    try {
+      const res = await core().api(`/api/chats/${encodeURIComponent(targetChatId)}/games/${encodeURIComponent(gameId)}/cancel`, {
+        method: 'POST'
+      });
+      if (res.message) {
+        const msgs = core().getState().messages;
+        const idx = msgs.findIndex((m) => m.id === res.message.id);
+        if (idx >= 0) {
+          msgs[idx] = res.message;
+          core().renderMessages(false);
+        }
+      }
+      if (fState.activeGameId === gameId) {
+        fState.activeGameId = null;
+        renderGamesModal();
+      }
+      core().showToast('Game invite cancelled.', 'success');
+    } catch (err) {
+      core().showToast(err.message, 'error');
+    }
   }
 
   function findGameById(gameId) {
@@ -1080,14 +1154,27 @@
           <div class="vr-room-section">
             <div class="info-label">Games in This Chat</div>
             <div class="vr-stack">
-              ${existingGames.slice(0, 5).map((g) => `
-                <button type="button" class="vr-pick-chat-btn" data-select-game="${esc(g.id)}">
-                  <span>${esc(g.title)} (${(g.players || []).map((p) => `@${p}`).join(' vs ')})</span>
-                  <span class="game-status-pill ${g.status === 'finished' ? 'done' : (g.turn === getMyUsername() ? 'yours' : '')}">
-                    ${g.status === 'finished' ? (g.draw ? 'Draw' : `@${esc(g.winner)} won`) : (g.turn === getMyUsername() ? 'Your Turn' : `@${esc(g.turn)}`)}
-                  </span>
-                </button>
-              `).join('')}
+              ${existingGames.slice(0, 6).map((g) => {
+                const creator = g.creator || (Array.isArray(g.players) ? g.players[0] : '');
+                const canCancel = g.status === 'active' && creator === getMyUsername();
+                const pillLabel = g.status === 'cancelled'
+                  ? 'Cancelled'
+                  : (g.status === 'finished'
+                    ? (g.draw ? 'Draw' : `@${esc(g.winner)} won`)
+                    : (g.turn === getMyUsername() ? 'Your Turn' : `@${esc(g.turn)}`));
+                const pillCls = g.status === 'cancelled'
+                  ? 'cancelled'
+                  : (g.status === 'finished' ? 'done' : (g.turn === getMyUsername() ? 'yours' : ''));
+                return `
+                  <div class="vr-inline-row">
+                    <button type="button" class="vr-pick-chat-btn" data-select-game="${esc(g.id)}">
+                      <span>${esc(g.title)} (${(g.players || []).map((p) => `@${p}`).join(' vs ')})</span>
+                      <span class="game-status-pill ${pillCls}">${pillLabel}</span>
+                    </button>
+                    ${canCancel ? `<button type="button" class="game-cancel-btn" data-cancel-game="${esc(g.id)}">Cancel</button>` : ''}
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
         ` : ''}
@@ -1110,13 +1197,18 @@
   function renderActiveGameBoard(titleEl, bodyEl, game) {
     const me = getMyUsername();
     const myTurn = game.status === 'active' && game.turn === me;
+    const creator = game.creator || (Array.isArray(game.players) ? game.players[0] : '');
+    const canCancel = game.status === 'active' && creator === me;
     if (titleEl) titleEl.textContent = game.title || 'Mini-Game';
 
-    const statusBanner = game.status === 'finished'
-      ? (game.draw
+    let statusBanner = `<div class="vr-game-banner ${myTurn ? 'yours' : ''}">${myTurn ? '🟢 Your Turn' : `⏳ Waiting for @${esc(game.turn)}`}</div>`;
+    if (game.status === 'cancelled') {
+      statusBanner = `<div class="vr-game-banner cancelled">🚫 Cancelled by @${esc(game.cancelledBy || creator)}</div>`;
+    } else if (game.status === 'finished') {
+      statusBanner = game.draw
         ? `<div class="vr-game-banner done">🤝 Draw! ${game.state && game.state.revealedWord ? `Word: <strong>${esc(game.state.revealedWord)}</strong>` : ''}</div>`
-        : `<div class="vr-game-banner won">🏆 @${esc(game.winner)} wins! ${game.state && game.state.revealedWord ? `Word: <strong>${esc(game.state.revealedWord)}</strong>` : ''}</div>`)
-      : `<div class="vr-game-banner ${myTurn ? 'yours' : ''}">${myTurn ? '🟢 Your Turn' : `⏳ Waiting for @${esc(game.turn)}`}</div>`;
+        : `<div class="vr-game-banner won">🏆 @${esc(game.winner)} wins! ${game.state && game.state.revealedWord ? `Word: <strong>${esc(game.state.revealedWord)}</strong>` : ''}</div>`;
+    }
 
     let boardHtml = '';
 
@@ -1222,7 +1314,10 @@
       <div class="vr-stack">
         <div class="vr-inline-row space-between">
           <button type="button" class="secondary-btn sm" data-games-back>← All Games</button>
-          <span class="vr-hint">${esc(game.movesCount || 0)} moves</span>
+          <div class="vr-inline-row">
+            <span class="vr-hint">${esc(game.movesCount || 0)} moves</span>
+            ${canCancel ? `<button type="button" class="game-cancel-btn" data-cancel-game="${esc(game.id)}">Cancel Game</button>` : ''}
+          </div>
         </div>
         ${statusBanner}
         ${boardHtml}
@@ -1246,6 +1341,12 @@
 
   async function handleGamesBodyClick(e) {
     if (!core()) return;
+    const cancelBtn = e.target.closest('[data-cancel-game]');
+    if (cancelBtn) {
+      await cancelGameById(cancelBtn.dataset.cancelGame, fState.activeGameChatId);
+      renderGamesModal();
+      return;
+    }
     if (e.target.closest('[data-games-back]')) {
       fState.activeGameId = null;
       fState.chessSelectedSq = null;
@@ -1484,7 +1585,11 @@
       if (stream && !ev.streams?.[0] && fState.remoteStream) {
         fState.remoteStream.addTrack(ev.track);
       }
+      if (ev.track && ev.track.kind === 'video' && fState.call) {
+        fState.call.hasRemoteVideo = true;
+      }
       if (rv && stream) rv.srcObject = stream;
+      renderCallUI();
     };
 
     pc.onconnectionstatechange = () => {
@@ -1544,8 +1649,10 @@
           ? formatCallDuration(Date.now() - (call.startedAt || Date.now()))
           : 'Ringing...';
       }
+      const showRemoteVideo = hasVideo && Boolean(call.hasRemoteVideo) && call.status === 'active';
+      if (el('call-remote-video')) el('call-remote-video').classList.toggle('hidden', !showRemoteVideo);
       if (el('call-stage-avatar')) core().renderAvatar(el('call-stage-avatar'), peer);
-      if (el('call-audio-placeholder')) el('call-audio-placeholder').classList.toggle('hidden', hasVideo && !fState.callCamOff);
+      if (el('call-audio-placeholder')) el('call-audio-placeholder').classList.toggle('hidden', showRemoteVideo);
       if (el('call-local-video')) el('call-local-video').classList.toggle('hidden', !hasVideo || fState.callCamOff);
       if (el('call-cam-btn')) el('call-cam-btn').classList.toggle('hidden', !hasVideo);
       if (el('call-flip-btn')) el('call-flip-btn').classList.toggle('hidden', !hasVideo);
@@ -2010,6 +2117,8 @@
     handleInviteJoin,
     renderRoomInfo,
     renderGameBubbleHtml,
+    renderCallBubbleHtml,
+    cancelGameById,
     openGameById,
     openStrangerModal,
     openGroupModal,

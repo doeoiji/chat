@@ -370,6 +370,24 @@ public class UpdateManager {
         }
     }
 
+    private String getApkAssetPrefix() {
+        try {
+            String p = ctx.getString(R.string.apk_asset_prefix);
+            if (p != null && !p.isEmpty()) return p;
+        } catch (Exception ignored) {
+        }
+        return "VibeRoom-v";
+    }
+
+    private String getAppDisplayName() {
+        try {
+            String n = ctx.getString(R.string.app_name);
+            if (n != null && !n.isEmpty()) return n;
+        } catch (Exception ignored) {
+        }
+        return "VibeRoom";
+    }
+
     private ReleaseMeta fetchLatestReleaseViaApi(String repo, SharedPreferences prefs) throws Exception {
         HttpURLConnection conn = null;
         try {
@@ -387,8 +405,9 @@ public class UpdateManager {
             conn.setReadTimeout(10000);
 
             int code = conn.getResponseCode();
+            String expectedPrefix = getApkAssetPrefix();
             if (code == HttpURLConnection.HTTP_NOT_MODIFIED && !cachedJson.isEmpty()) {
-                return parseReleaseJson(new JSONObject(cachedJson));
+                return parseReleaseJson(new JSONObject(cachedJson), expectedPrefix);
             }
             if (code == 404) {
                 return new ReleaseMeta("", "", "", "", 0);
@@ -421,7 +440,7 @@ public class UpdateManager {
             }
             editor.remove(KEY_API_BLOCKED_UNTIL).apply();
 
-            return parseReleaseJson(rel);
+            return parseReleaseJson(rel, expectedPrefix);
         } finally {
             if (conn != null) conn.disconnect();
         }
@@ -472,11 +491,12 @@ public class UpdateManager {
             String htmlUrl = "https://github.com/" + repo + "/releases/tag/" + encodedTag;
             String notes = "";
             long apkSize = 0;
+            String expectedPrefix = getApkAssetPrefix();
 
             String cachedJson = prefs.getString(KEY_CACHED_RELEASE_JSON, "");
             if (!cachedJson.isEmpty()) {
                 try {
-                    ReleaseMeta cached = parseReleaseJson(new JSONObject(cachedJson));
+                    ReleaseMeta cached = parseReleaseJson(new JSONObject(cachedJson), expectedPrefix);
                     if (tag.equals(cached.tag)) {
                         notes = cached.notes;
                         apkSize = cached.apkSize;
@@ -485,14 +505,25 @@ public class UpdateManager {
                 }
             }
 
-            String apkUrl = findApkAssetViaWeb(repo, encodedTag);
+            String apkUrl = findApkAssetViaWeb(repo, encodedTag, expectedPrefix);
             return new ReleaseMeta(tag, notes, htmlUrl, apkUrl, apkSize);
         } finally {
             if (conn != null) conn.disconnect();
         }
     }
 
-    private String findApkAssetViaWeb(String repo, String encodedTag) {
+    private static boolean matchesVariantApk(String lowerName, String expectedPrefix) {
+        if (!lowerName.endsWith(".apk")) return false;
+        String lowerPrefix = expectedPrefix.toLowerCase();
+        if (lowerName.startsWith(lowerPrefix)) return true;
+        // Legacy flavor must only install legacy APK; standard flavor skips legacy APKs
+        if (lowerPrefix.contains("legacy")) {
+            return lowerName.contains("legacy");
+        }
+        return !lowerName.contains("legacy") && !lowerName.contains("compat");
+    }
+
+    private String findApkAssetViaWeb(String repo, String encodedTag, String expectedPrefix) {
         String[] candidatePages = new String[] {
             "https://github.com/" + repo + "/releases/expanded_assets/" + encodedTag,
             "https://github.com/" + repo + "/releases/tag/" + encodedTag
@@ -504,9 +535,12 @@ public class UpdateManager {
                 if (conn.getResponseCode() == 200) {
                     String html = readStream(conn.getInputStream());
                     Matcher m = APK_HREF_PATTERN.matcher(html);
-                    if (m.find()) {
+                    while (m.find()) {
                         String href = m.group(1);
-                        return new URL(new URL("https://github.com"), href).toString();
+                        String fileName = href.substring(href.lastIndexOf('/') + 1).toLowerCase();
+                        if (matchesVariantApk(fileName, expectedPrefix)) {
+                            return new URL(new URL("https://github.com"), href).toString();
+                        }
                     }
                 }
             } catch (Exception ignored) {
@@ -514,10 +548,11 @@ public class UpdateManager {
                 if (conn != null) conn.disconnect();
             }
         }
-        return "https://github.com/" + repo + "/releases/download/" + encodedTag + "/VibeRoom-" + encodedTag + ".apk";
+        String cleanVer = encodedTag.replaceFirst("^[vV]", "");
+        return "https://github.com/" + repo + "/releases/download/" + encodedTag + "/" + expectedPrefix + cleanVer + ".apk";
     }
 
-    private static ReleaseMeta parseReleaseJson(JSONObject rel) {
+    private static ReleaseMeta parseReleaseJson(JSONObject rel, String expectedPrefix) {
         String tag = rel.optString("tag_name", "").trim();
         String notes = rel.optString("body", "").trim();
         String htmlUrl = rel.optString("html_url", "");
@@ -529,7 +564,7 @@ public class UpdateManager {
                 JSONObject asset = assets.optJSONObject(i);
                 if (asset == null) continue;
                 String name = asset.optString("name", "").toLowerCase();
-                if (name.endsWith(".apk")) {
+                if (matchesVariantApk(name, expectedPrefix)) {
                     apkUrl = asset.optString("browser_download_url", "");
                     apkSize = asset.optLong("size", 0);
                     break;
@@ -598,7 +633,7 @@ public class UpdateManager {
                     }
                 }
 
-                String fileName = "VibeRoom-v" + (latestVersion.isEmpty() ? "update" : latestVersion) + ".apk";
+                String fileName = getApkAssetPrefix() + (latestVersion.isEmpty() ? "update" : latestVersion) + ".apk";
                 File targetFile = new File(updatesDir, fileName);
 
                 conn = openFollowingRedirects(downloadUrl, 5);
@@ -607,7 +642,9 @@ public class UpdateManager {
                     throw new Exception("Download failed (HTTP " + code + ")");
                 }
 
-                long total = conn.getContentLengthLong();
+                long total = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+                    ? conn.getContentLengthLong()
+                    : conn.getContentLength();
                 if (total <= 0) total = apkSizeBytes;
 
                 try (InputStream is = conn.getInputStream();
@@ -769,11 +806,15 @@ public class UpdateManager {
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         openIntent.putExtra(EXTRA_OPEN_UPDATES, true);
 
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            piFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
         PendingIntent pi = PendingIntent.getActivity(
             ctx,
             UPDATE_NOTIF_ID,
             openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            piFlags
         );
 
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -781,7 +822,7 @@ public class UpdateManager {
             : new Notification.Builder(ctx);
 
         builder.setSmallIcon(R.drawable.ic_stat_telechat)
-            .setContentTitle("VibeRoom Update Available (v" + newVersion + ")")
+            .setContentTitle(getAppDisplayName() + " Update Available (v" + newVersion + ")")
             .setContentText("Tap to download and install the new app version.")
             .setAutoCancel(true)
             .setContentIntent(pi);

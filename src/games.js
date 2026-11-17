@@ -304,6 +304,7 @@ function createGamesService({ storage }) {
       id: gameId,
       type: cleanType,
       title: TITLES[cleanType],
+      creator: creatorUsername,
       players: [creatorUsername, opponent],
       turn: creatorUsername,
       status: 'active',
@@ -545,10 +546,54 @@ function createGamesService({ storage }) {
     return result;
   }
 
+  async function cancelGame({ chatId, gameId, requesterUsername }) {
+    const result = await storage.mutateChatMessages(chatId, ({ meta, messages }) => {
+      if (!meta.participants.includes(requesterUsername)) {
+        const err = new Error('Chat not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const msg = messages.find((m) => m.kind === 'game' && m.game && m.game.id === gameId);
+      if (!msg) {
+        const err = new Error('Game not found.');
+        err.statusCode = 404;
+        throw err;
+      }
+      const game = msg.game;
+      const inviteSender = game.creator || (Array.isArray(game.players) ? game.players[0] : null);
+      if (inviteSender !== requesterUsername) {
+        const err = new Error('Only the user who sent the game invite can cancel it.');
+        err.statusCode = 403;
+        throw err;
+      }
+      if (game.status !== 'active') {
+        const err = new Error('Only an active game can be cancelled.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      game.status = 'cancelled';
+      game.cancelledBy = requesterUsername;
+      game.turn = null;
+      game.updatedAt = new Date().toISOString();
+      msg.text = `🚫 ${game.title} invite cancelled by @${requesterUsername}`;
+      return { message: msg, saveMessages: true, saveMeta: false };
+    });
+
+    if (!result) {
+      const err = new Error('Game not found.');
+      err.statusCode = 404;
+      throw err;
+    }
+
+    return result;
+  }
+
   return {
     TITLES,
     createGame,
-    makeMove
+    makeMove,
+    cancelGame
   };
 }
 

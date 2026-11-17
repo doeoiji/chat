@@ -243,18 +243,20 @@ public class MainActivity extends Activity {
                         return;
                     }
                     ArrayList<String> needed = new ArrayList<>();
-                    for (String res : request.getResources()) {
-                        if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)
-                            && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                            needed.add(Manifest.permission.RECORD_AUDIO);
-                        } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)
-                            && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                            needed.add(Manifest.permission.CAMERA);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        for (String res : request.getResources()) {
+                            if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)
+                                && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                needed.add(Manifest.permission.RECORD_AUDIO);
+                            } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)
+                                && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                                needed.add(Manifest.permission.CAMERA);
+                            }
                         }
                     }
                     if (needed.isEmpty()) {
                         request.grant(request.getResources());
-                    } else {
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         if (pendingWebPermissionRequest != null) {
                             pendingWebPermissionRequest.deny();
                         }
@@ -535,12 +537,14 @@ public class MainActivity extends Activity {
             PermissionRequest req = pendingWebPermissionRequest;
             pendingWebPermissionRequest = null;
             ArrayList<String> grantedResources = new ArrayList<>();
+            boolean canAudio = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+            boolean canCamera = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
             for (String res : req.getResources()) {
-                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res)
-                    && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(res) && canAudio) {
                     grantedResources.add(res);
-                } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res)
-                    && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                } else if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(res) && canCamera) {
                     grantedResources.add(res);
                 }
             }

@@ -1079,7 +1079,21 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
   assert.equal(wgGuess.status, 200);
   assert.equal(wgGuess.body.message.game.state.guesses.length, 1);
 
-  // 5. WebRTC Call Signaling flow
+  // Invitee (Bob) cannot cancel Alice's active game, only invite sender (Alice) can
+  const bobCancelDenied = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${wgId}/cancel`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(bobCancelDenied.status, 403);
+
+  const aliceCancelOk = await invokeRouter(handleRequest, `/api/chats/${chatId}/games/${wgId}/cancel`, {
+    method: 'POST',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(aliceCancelOk.status, 200);
+  assert.equal(aliceCancelOk.body.message.game.status, 'cancelled');
+
+  // 5. WebRTC Call Signaling & Call History persistence
   const cfgRes = await invokeRouter(handleRequest, '/api/calls/config', {
     headers: { Cookie: alice.cookie }
   });
@@ -1113,4 +1127,20 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
     body: JSON.stringify({ reason: 'hangup' })
   });
   assert.equal(endRes.status, 200);
+
+  // Verify call history message was saved in chat & chat list preview
+  const chatMessagesAfterCall = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_p' })
+  });
+  assert.equal(chatMessagesAfterCall.status, 200);
+  const callLogMsg = chatMessagesAfterCall.body.messages.find((m) => m.kind === 'call' && m.call && m.call.callId === callId);
+  assert.ok(callLogMsg, 'Expected completed call log message in DM history');
+  assert.equal(callLogMsg.call.status, 'completed');
+  assert.equal(callLogMsg.call.mode, 'video');
+
+  const aliceChatList = await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } });
+  assert.equal(aliceChatList.status, 200);
+  assert.match(aliceChatList.body.chats[0].lastMessage.preview, /Video call/);
 });

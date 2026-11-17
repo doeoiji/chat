@@ -15,8 +15,28 @@ android {
         applicationId "fun.bitdev.telechat"
         minSdk 24
         targetSdk 35
-        versionCode 8
-        versionName "1.0.7"
+        versionCode 9
+        versionName "1.0.8"
+    }
+
+    flavorDimensions "compat"
+    productFlavors {
+        standard {
+            dimension "compat"
+            applicationId "fun.bitdev.telechat"
+            minSdk 24
+            targetSdk 35
+            resValue "string", "app_name", "VibeRoom"
+            resValue "string", "apk_asset_prefix", "VibeRoom-v"
+        }
+        legacy {
+            dimension "compat"
+            applicationId "fun.bitdev.telechat.legacy"
+            minSdk 21
+            targetSdk 29
+            resValue "string", "app_name", "VibeRoom Legacy"
+            resValue "string", "apk_asset_prefix", "VibeRoom-Legacy-v"
+        }
     }
 
     signingConfigs {
@@ -27,6 +47,8 @@ android {
                 keyAlias releaseKeyAlias
                 keyPassword releaseKeyPass
             }
+            v1SigningEnabled true
+            v2SigningEnabled true
         }
     }
 

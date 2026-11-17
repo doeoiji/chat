@@ -23,11 +23,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Accept Android SDK Licenses & Install SDK 35
+      - name: Accept Android SDK Licenses & Install SDKs
         run: |
           SDKMANAGER=$(ls -d /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager | tail -n 1)
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" "platforms;android-35" "platforms;android-29" "build-tools;35.0.0"
 
       - name: Cache Android Release Keystore
         uses: actions/cache@v4
@@ -47,26 +47,34 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build Signed Release APK
+      - name: Build Signed Release APKs (Standard + Legacy)
         working-directory: android
-        run: gradle assembleRelease
+        run: gradle assembleStandardRelease assembleLegacyRelease
 
-      - name: Publish GitHub Release & Upload APK
+      - name: Publish GitHub Release & Upload Both APKs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VER=$(grep -E 'versionName\s+"' android/app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
           TAG="v${VER}"
-          APK="android/app/build/outputs/apk/release/VibeRoom-${TAG}.apk"
-          cp android/app/build/outputs/apk/release/app-release.apk "$APK"
+          STD_APK="android/app/build/outputs/apk/standard/release/VibeRoom-${TAG}.apk"
+          LEG_APK="android/app/build/outputs/apk/legacy/release/VibeRoom-Legacy-${TAG}.apk"
+          cp android/app/build/outputs/apk/standard/release/app-standard-release.apk "$STD_APK"
+          cp android/app/build/outputs/apk/legacy/release/app-legacy-release.apk "$LEG_APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" --clobber
+            gh release upload "$TAG" "$STD_APK" "$LEG_APK" --clobber
           else
-            gh release create "$TAG" "$APK" --title "VibeRoom ${TAG}" --notes "VibeRoom Android app ${TAG}" --latest
+            gh release create "$TAG" "$STD_APK" "$LEG_APK" --title "VibeRoom ${TAG}" --notes "VibeRoom Android ${TAG} (includes VibeRoom-v${VER}.apk for Android 7+ and VibeRoom-Legacy-v${VER}.apk for Android 5.0–10 / older devices)" --latest
           fi
 
-      - name: Upload VibeRoom APK Artifact
+      - name: Upload VibeRoom Standard APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VibeRoom-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          name: VibeRoom-Standard-APK
+          path: android/app/build/outputs/apk/standard/release/app-standard-release.apk
+
+      - name: Upload VibeRoom Legacy APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VibeRoom-Legacy-APK
+          path: android/app/build/outputs/apk/legacy/release/app-legacy-release.apk

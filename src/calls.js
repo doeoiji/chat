@@ -71,6 +71,7 @@ function createCallsService({ hub, storage }) {
     const callId = `call_${crypto.randomBytes(6).toString('hex')}`;
     const cleanMode = mode === 'video' ? 'video' : 'audio';
     const dmChatId = chatId || storage.getDmChatId(callerUsername, callee);
+    await storage.ensureChatFolder(callerUsername, callee);
 
     const call = {
       id: callId,
@@ -79,11 +80,60 @@ function createCallsService({ hub, storage }) {
       mode: cleanMode,
       chatId: dmChatId,
       status: 'ringing',
+      startedAt: null,
+      historyLogged: false,
       createdAt: new Date().toISOString(),
       timeoutId: null
     };
 
-    call.timeoutId = setTimeout(() => {
+    async function recordCallHistory(targetCall, outcome) {
+      if (!targetCall || targetCall.historyLogged || !targetCall.chatId) return;
+      targetCall.historyLogged = true;
+      const durationSec = targetCall.startedAt
+        ? Math.max(1, Math.round((Date.now() - targetCall.startedAt) / 1000))
+        : 0;
+      const modeLabel = targetCall.mode === 'video' ? 'Video call' : 'Audio call';
+      let text = modeLabel;
+      if (outcome === 'completed') {
+        const mins = Math.floor(durationSec / 60);
+        const secs = String(durationSec % 60).padStart(2, '0');
+        text = `${modeLabel} • ${mins}:${secs}`;
+      } else if (outcome === 'missed') {
+        text = `Missed ${modeLabel.toLowerCase()}`;
+      } else if (outcome === 'declined') {
+        text = `Declined ${modeLabel.toLowerCase()}`;
+      } else {
+        text = `Cancelled ${modeLabel.toLowerCase()}`;
+      }
+      try {
+        await storage.ensureChatFolder(targetCall.caller, targetCall.callee);
+        const { message, meta } = await storage.appendChatMessage(targetCall.chatId, targetCall.caller, {
+          text,
+          kind: 'call',
+          call: {
+            callId: targetCall.id,
+            mode: targetCall.mode,
+            status: outcome,
+            durationSec,
+            caller: targetCall.caller,
+            callee: targetCall.callee
+          }
+        });
+        const callerRaw = await storage.getUserByUsername(targetCall.caller);
+        hub.emitToUsers([targetCall.caller, targetCall.callee], 'new_message', {
+          chatId: targetCall.chatId,
+          message,
+          meta,
+          senderProfile: callerRaw ? storage.toPublicUser(callerRaw) : null
+        });
+      } catch {
+        // Ignore history write failure on cleanup
+      }
+    }
+
+    call._recordHistory = recordCallHistory;
+
+    call.timeoutId = setTimeout(async () => {
       const c = calls.get(callId);
       if (!c || c.status !== 'ringing') return;
       c.status = 'ended';
@@ -92,6 +142,7 @@ function createCallsService({ hub, storage }) {
         reason: 'missed',
         endedBy: 'system'
       });
+      await recordCallHistory(c, 'missed');
       cleanupCall(callId);
     }, 45000);
     if (typeof call.timeoutId.unref === 'function') call.timeoutId.unref();
@@ -135,6 +186,7 @@ function createCallsService({ hub, storage }) {
       call.timeoutId = null;
     }
     call.status = 'active';
+    call.startedAt = Date.now();
     hub.emitToUser(peer, 'call_accepted', {
       callId,
       by: actorUsername
@@ -158,18 +210,21 @@ function createCallsService({ hub, storage }) {
     return { ok: true };
   }
 
-  function declineCall(callId, actorUsername) {
+  async function declineCall(callId, actorUsername) {
     const { call, peer } = getCallAndPeer(callId, actorUsername);
     call.status = 'ended';
     hub.emitToUser(peer, 'call_declined', {
       callId,
       by: actorUsername
     });
+    if (typeof call._recordHistory === 'function') {
+      await call._recordHistory(call, 'declined');
+    }
     cleanupCall(callId);
     return { ok: true };
   }
 
-  function endCall(callId, actorUsername, reason = 'hangup') {
+  async function endCall(callId, actorUsername, reason = 'hangup') {
     const call = calls.get(callId);
     if (!call || (call.caller !== actorUsername && call.callee !== actorUsername)) {
       return { ok: true };
@@ -181,6 +236,12 @@ function createCallsService({ hub, storage }) {
       endedBy: actorUsername,
       reason
     });
+    const outcome = call.startedAt
+      ? 'completed'
+      : (actorUsername === call.caller ? 'cancelled' : 'missed');
+    if (typeof call._recordHistory === 'function') {
+      await call._recordHistory(call, outcome);
+    }
     cleanupCall(callId);
     return { ok: true };
   }

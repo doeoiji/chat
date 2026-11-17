@@ -1033,7 +1033,7 @@ function createStorage(config) {
     return { meta, messages };
   }
 
-  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', game = null, allowChannelSystem = false }) {
+  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', game = null, call = null, allowChannelSystem = false }) {
     const folder = chatFolder(chatId);
     if (!folder) {
       const err = new Error('Invalid chat ID.');
@@ -1042,7 +1042,7 @@ function createStorage(config) {
     }
 
     const cleanText = typeof text === 'string' ? text.trim().slice(0, 4000) : '';
-    if (!cleanText && (!files || files.length === 0) && !game) {
+    if (!cleanText && (!files || files.length === 0) && !game && !call) {
       const err = new Error('Message text or at least one file is required.');
       err.statusCode = 400;
       throw err;
@@ -1105,18 +1105,23 @@ function createStorage(config) {
 
       const now = new Date().toISOString();
       const mentions = extractMentions(cleanText);
+      const msgKind = game ? 'game' : (call ? 'call' : kind);
+      const readBy = call && call.status !== 'missed' && Array.isArray(meta.participants)
+        ? meta.participants.slice()
+        : [senderUsername];
       const message = {
         id: `msg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
         chatId,
-        kind: game ? 'game' : kind,
+        kind: msgKind,
         sender: senderUsername,
         text: cleanText,
         mentions,
         attachments,
         replyTo: replySnapshot,
         game: game || undefined,
+        call: call || undefined,
         reactions: {},
-        readBy: [senderUsername],
+        readBy,
         createdAt: now
       };
 
@@ -1132,11 +1137,20 @@ function createStorage(config) {
 
       // Update meta
       meta.updatedAt = now;
-      const previewText = game
-        ? `🎮 ${game.title || game.type}`
-        : (cleanText
-          ? cleanText.slice(0, 80)
-          : (attachments[0].isImage ? '📷 Photo' : `📎 ${attachments[0].originalName}`));
+      let previewText = '';
+      if (game) {
+        previewText = `🎮 ${game.title || game.type}`;
+      } else if (call) {
+        const icon = call.mode === 'video' ? '📹 Video call' : '📞 Audio call';
+        if (call.status === 'missed') previewText = `${icon} • Missed`;
+        else if (call.status === 'declined') previewText = `${icon} • Declined`;
+        else if (call.status === 'cancelled') previewText = `${icon} • Cancelled`;
+        else previewText = call.durationSec > 0 ? `${icon} • ${Math.floor(call.durationSec / 60)}:${String(call.durationSec % 60).padStart(2, '0')}` : icon;
+      } else if (cleanText) {
+        previewText = cleanText.slice(0, 80);
+      } else {
+        previewText = attachments[0].isImage ? '📷 Photo' : `📎 ${attachments[0].originalName}`;
+      }
       meta.lastMessage = {
         id: message.id,
         sender: senderUsername,
@@ -1146,9 +1160,12 @@ function createStorage(config) {
         createdAt: now
       };
       meta.unreadCounts = meta.unreadCounts || {};
-      for (const participant of meta.participants) {
-        if (participant !== senderUsername) {
-          meta.unreadCounts[participant] = (meta.unreadCounts[participant] || 0) + 1;
+      const markUnreadForPeer = !call || call.status === 'missed';
+      if (markUnreadForPeer) {
+        for (const participant of meta.participants) {
+          if (participant !== senderUsername) {
+            meta.unreadCounts[participant] = (meta.unreadCounts[participant] || 0) + 1;
+          }
         }
       }
       await writeJsonAtomic(metaPath, meta);

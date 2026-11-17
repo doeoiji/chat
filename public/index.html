@@ -974,8 +974,23 @@
       <h3 id="call-ring-name">Incoming Call</h3>
       <div id="call-ring-sub" class="call-ring-sub">Voice Call</div>
       <div class="call-ring-actions">
-        <button id="call-decline-btn" class="call-circle-btn decline" type="button" title="Decline">✕</button>
-        <button id="call-accept-btn" class="call-circle-btn accept" type="button" title="Answer">✓</button>
+        <div class="call-ring-btn-col">
+          <button id="call-decline-btn" class="call-circle-btn decline" type="button" title="Decline" aria-label="Decline">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.11 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91"/>
+              <line x1="1" y1="1" x2="23" y2="23"/>
+            </svg>
+          </button>
+          <span>Decline</span>
+        </div>
+        <div class="call-ring-btn-col">
+          <button id="call-accept-btn" class="call-circle-btn accept" type="button" title="Answer" aria-label="Answer">
+            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+          </button>
+          <span>Accept</span>
+        </div>
       </div>
     </div>
   </div>
@@ -998,17 +1013,17 @@
         </button>
       </div>
       <div class="call-videos">
-        <video id="call-remote-video" class="call-remote-video" autoplay playsinline></video>
+        <video id="call-remote-video" class="call-remote-video hidden" autoplay playsinline disableRemotePlayback></video>
         <div id="call-audio-placeholder" class="call-audio-placeholder">
           <div id="call-stage-avatar" class="avatar avatar-xl"></div>
         </div>
-        <video id="call-local-video" class="call-local-video hidden" autoplay muted playsinline></video>
+        <video id="call-local-video" class="call-local-video hidden" autoplay muted playsinline disableRemotePlayback></video>
       </div>
       <div class="call-controls">
-        <button id="call-mute-btn" class="call-ctrl-btn" type="button" title="Mute / Unmute">🎤</button>
-        <button id="call-cam-btn" class="call-ctrl-btn" type="button" title="Toggle Camera">📷</button>
-        <button id="call-flip-btn" class="call-ctrl-btn" type="button" title="Switch Camera">🔄</button>
-        <button id="call-hangup-btn" class="call-ctrl-btn hangup" type="button" title="End Call">📞</button>
+        <button id="call-mute-btn" class="call-ctrl-btn" type="button" title="Mute / Unmute">🎙️ Mute</button>
+        <button id="call-cam-btn" class="call-ctrl-btn hidden" type="button" title="Toggle Camera">📷 Cam</button>
+        <button id="call-flip-btn" class="call-ctrl-btn hidden" type="button" title="Switch Camera">🔄 Flip</button>
+        <button id="call-hangup-btn" class="call-ctrl-btn hangup" type="button" title="End Call">End Call</button>
       </div>
     </div>
   </div>

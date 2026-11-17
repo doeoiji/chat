@@ -698,6 +698,23 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         return sendJson(res, 200, { message });
       }
 
+      const gameCancelMatch = /^\/api\/chats\/([^/]+)\/games\/([^/]+)\/cancel$/.exec(pathname);
+      if (method === 'POST' && gameCancelMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, gameId] = gameCancelMatch;
+        const { message, meta } = await games.cancelGame({
+          chatId,
+          gameId,
+          requesterUsername: me.username
+        });
+        hub.emitToUsers(meta.participants, 'message_updated', {
+          chatId,
+          message
+        });
+        return sendJson(res, 200, { message });
+      }
+
       // ===================================================================
       // Anonymous Random Chat ("Stranger Lounge")
       // ===================================================================
@@ -786,8 +803,8 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         const body = await readJsonBody(req);
         if (action === 'accept') return sendJson(res, 200, calls.acceptCall(callId, me.username));
         if (action === 'signal') return sendJson(res, 200, calls.relaySignal(callId, me.username, body));
-        if (action === 'decline') return sendJson(res, 200, calls.declineCall(callId, me.username));
-        if (action === 'end') return sendJson(res, 200, calls.endCall(callId, me.username, body.reason || 'hangup'));
+        if (action === 'decline') return sendJson(res, 200, await calls.declineCall(callId, me.username));
+        if (action === 'end') return sendJson(res, 200, await calls.endCall(callId, me.username, body.reason || 'hangup'));
       }
 
       // SSE Real-time Event Stream

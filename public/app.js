@@ -1759,13 +1759,23 @@
         }
       }
 
+      let callCardHtml = '';
+      if (msg.kind === 'call' && msg.call) {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.renderCallBubbleHtml === 'function') {
+          callCardHtml = window.VibeRoomFeatures.renderCallBubbleHtml(msg);
+        } else {
+          callCardHtml = `<div class="call-log-msg">${escapeHtml(msg.text || 'Call')}</div>`;
+        }
+      }
+
       const bubbleHtml = `
         <div class="msg-bubble">
           ${senderHeaderHtml}
           ${replyHtml}
           ${renderAttachmentsHtml(msg)}
           ${gameCardHtml}
-          ${msg.text && msg.kind !== 'game' ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
+          ${callCardHtml}
+          ${msg.text && msg.kind !== 'game' && msg.kind !== 'call' ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
           ${renderReactionsHtml(msg)}
           <div class="msg-footer">
             <span>${escapeHtml(formatTime(msg.createdAt))}</span>
@@ -2243,17 +2253,21 @@
     es.addEventListener('new_message', async (ev) => {
       const data = JSON.parse(ev.data);
       const isSystem = data.message.kind === 'system' || data.message.sender === 'system';
-      const isIncoming = !isSystem && data.message.sender !== state.me.username;
+      const isCallLog = data.message.kind === 'call' && data.message.call;
+      const isSilentCallLog = isCallLog && data.message.call.status !== 'missed';
+      const isIncoming = !isSystem && !isSilentCallLog && data.message.sender !== state.me.username;
       const senderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
       const senderAvatarUrl = (data.senderProfile && data.senderProfile.avatarUrl) || '';
       const senderAvatarColor = (data.senderProfile && data.senderProfile.avatarColor) || '';
       const bodyPreview = data.message.kind === 'game'
         ? `🎮 ${(data.message.game && data.message.game.title) || 'Mini-Game'}`
-        : (data.message.text
-          ? data.message.text.slice(0, 120)
-          : (data.message.attachments && data.message.attachments[0]
-            ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
-            : 'New message'));
+        : (isCallLog
+          ? (data.message.text || 'Call')
+          : (data.message.text
+            ? data.message.text.slice(0, 120)
+            : (data.message.attachments && data.message.attachments[0]
+              ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
+              : 'New message')));
 
       if (data.chatId === state.activeChatId) {
         const wasNearBottom = isNearBottom();
@@ -3286,6 +3300,24 @@
         return;
       }
 
+      const cancelGameBtn = e.target.closest('[data-cancel-game]');
+      if (cancelGameBtn && state.activeChatId) {
+        e.stopPropagation();
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.cancelGameById === 'function') {
+          await window.VibeRoomFeatures.cancelGameById(cancelGameBtn.dataset.cancelGame, state.activeChatId);
+        }
+        return;
+      }
+
+      const callBackBtn = e.target.closest('[data-call-back]');
+      if (callBackBtn && state.activePeer) {
+        e.stopPropagation();
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.initiateCall === 'function') {
+          await window.VibeRoomFeatures.initiateCall(callBackBtn.dataset.callBack || 'audio');
+        }
+        return;
+      }
+
       const gameTrigger = e.target.closest('[data-open-game]');
       if (gameTrigger && state.activeChatId) {
         if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.openGameById === 'function') {
@@ -3305,7 +3337,7 @@
 
       // On desktop websites (fine pointer, non-Android), left-clicking a message bubble opens the action + reaction menu
       if (!isMobileTouchMode() && e.button === 0 && e.currentTarget === els.messagesList) {
-        if (e.target.closest('a, button, video, audio, .msg-actions, .game-card-msg, .mention-tag')) return;
+        if (e.target.closest('a, button, video, audio, .msg-actions, .game-card-msg, .call-log-msg, .mention-tag')) return;
         const selected = typeof window.getSelection === 'function' ? String(window.getSelection() || '').trim() : '';
         if (selected.length > 0) return;
         const bubble = e.target.closest('.msg-bubble');

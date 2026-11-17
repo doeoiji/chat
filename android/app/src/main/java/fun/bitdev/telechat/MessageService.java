@@ -326,7 +326,7 @@ public class MessageService extends Service {
                 return;
             }
         }
-        NotificationManager manager = ctx.getSystemService(NotificationManager.class);
+        NotificationManager manager = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
 
         Intent openIntent = new Intent(ctx, MainActivity.class);
@@ -335,11 +335,15 @@ public class MessageService extends Service {
             openIntent.putExtra(EXTRA_CHAT_ID, chatId);
         }
 
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            piFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
         PendingIntent pi = PendingIntent.getActivity(
             ctx,
             CALL_NOTIF_ID,
             openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            piFlags
         );
 
         String label = "video".equalsIgnoreCase(mode) ? "Incoming video call" : "Incoming voice call";
@@ -509,11 +513,15 @@ public class MessageService extends Service {
             openIntent.putExtra(EXTRA_CHAT_ID, chatId);
         }
 
+        int msgPiFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            msgPiFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
         PendingIntent pendingIntent = PendingIntent.getActivity(
             ctx,
             shortcutId.hashCode(),
             openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+            msgPiFlags
         );
 
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
