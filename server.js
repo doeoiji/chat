@@ -21,7 +21,7 @@ function createApp(overrides = {}) {
 if (require.main === module) {
   const { server, config } = createApp();
   server.listen(config.port, config.host, () => {
-    console.log(`TeleChat running at http://${config.host}:${config.port}`);
+    console.log(`VibeRoom running at http://${config.host}:${config.port}`);
     console.log(`User folders: ${config.usersDir}`);
     console.log(`Chat log folders: ${config.chatsDir}`);
   });

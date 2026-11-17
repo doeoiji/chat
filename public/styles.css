@@ -1,5 +1,5 @@
 /* ==========================================================================
-   TeleChat — Telegram-Inspired Theme & Smooth UI
+   VibeRoom — Smooth Messaging, Calls & Games UI
    ========================================================================== */
 
 :root {
@@ -284,8 +284,8 @@ button, input, textarea {
   padding: 20px;
   overflow-y: auto;
   background:
-    radial-gradient(circle at 20% 20%, rgba(55, 174, 226, 0.15), transparent 45%),
-    radial-gradient(circle at 80% 80%, rgba(82, 136, 193, 0.14), transparent 45%),
+    radial-gradient(circle at 20% 20%, rgba(55, 174, 226, 0.16), transparent 45%),
+    radial-gradient(circle at 80% 80%, rgba(124, 92, 255, 0.15), transparent 45%),
     var(--bg-app);
 }
 
@@ -689,7 +689,7 @@ button, input, textarea {
 
 .drawer-header {
   padding: 20px 18px 16px;
-  background: linear-gradient(135deg, rgba(82, 136, 193, 0.22), rgba(55, 174, 226, 0.08));
+  background: linear-gradient(135deg, rgba(55, 174, 226, 0.2), rgba(124, 92, 255, 0.16));
   border-bottom: 1px solid var(--border-subtle);
 }
 .drawer-user-top {

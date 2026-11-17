@@ -1,4 +1,4 @@
-/* TeleChat Service Worker — ensures fresh updates & handles notification clicks */
+/* VibeRoom Service Worker — ensures fresh updates & handles notification clicks */
 self.addEventListener('install', () => {
   self.skipWaiting();
 });

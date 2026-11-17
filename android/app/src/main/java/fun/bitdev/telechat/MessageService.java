@@ -422,7 +422,7 @@ public class MessageService extends Service {
             }
         }
 
-        String safeTitle = title != null && !title.isEmpty() ? title : "TeleChat";
+        String safeTitle = title != null && !title.isEmpty() ? title : "VibeRoom";
         String safeBody = body != null && !body.isEmpty() ? body : "New message";
         String shortcutId = (chatId != null && !chatId.isEmpty())
             ? chatId

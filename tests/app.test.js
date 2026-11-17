@@ -434,7 +434,7 @@ test('full user registration, folder storage, search, chat logs, and image/file 
   const homeRes = await req('/');
   assert.equal(homeRes.status, 200);
   const homeHtml = homeRes.body.toString('utf8');
-  assert.match(homeHtml, /<title>TeleChat/);
+  assert.match(homeHtml, /<title>VibeRoom/);
   assert.match(homeHtml, /\/styles\.css\?v=[a-f0-9]{8}/);
   assert.match(homeHtml, /\/app\.js\?v=[a-f0-9]{8}/);
   assert.equal(homeRes.headers['cache-control'], 'no-store');
@@ -442,7 +442,7 @@ test('full user registration, folder storage, search, chat logs, and image/file 
   const manifestRes = await req('/manifest.webmanifest');
   assert.equal(manifestRes.status, 200);
   const manifestJson = JSON.parse(manifestRes.body.toString('utf8'));
-  assert.equal(manifestJson.name, 'TeleChat');
+  assert.equal(manifestJson.name, 'VibeRoom');
 
   // Non-participant should be denied access to files
   const carolReg = await registerAndVerify({

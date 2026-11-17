@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "TeleChat"
+rootProject.name = "VibeRoom"
 include ":app"

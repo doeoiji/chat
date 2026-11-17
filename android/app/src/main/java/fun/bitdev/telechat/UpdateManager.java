@@ -214,7 +214,7 @@ public class UpdateManager {
                 conn = (HttpURLConnection) url.openConnection();
                 conn.setRequestMethod("GET");
                 conn.setRequestProperty("Accept", "application/vnd.github+json");
-                conn.setRequestProperty("User-Agent", "TeleChat-Android/" + getInstalledVersionName());
+                conn.setRequestProperty("User-Agent", "VibeRoom-Android/" + getInstalledVersionName());
                 conn.setConnectTimeout(10000);
                 conn.setReadTimeout(10000);
 
@@ -352,7 +352,7 @@ public class UpdateManager {
                     }
                 }
 
-                String fileName = "TeleChat-v" + (latestVersion.isEmpty() ? "update" : latestVersion) + ".apk";
+                String fileName = "VibeRoom-v" + (latestVersion.isEmpty() ? "update" : latestVersion) + ".apk";
                 File targetFile = new File(updatesDir, fileName);
 
                 conn = openFollowingRedirects(downloadUrl, 5);
@@ -505,7 +505,7 @@ public class UpdateManager {
                 "App Updates",
                 NotificationManager.IMPORTANCE_HIGH
             );
-            ch.setDescription("Alerts when a new TeleChat Android app version is available");
+            ch.setDescription("Alerts when a new VibeRoom Android app version is available");
             manager.createNotificationChannel(ch);
         }
     }
@@ -535,7 +535,7 @@ public class UpdateManager {
             : new Notification.Builder(ctx);
 
         builder.setSmallIcon(R.drawable.ic_stat_telechat)
-            .setContentTitle("TeleChat Update Available (v" + newVersion + ")")
+            .setContentTitle("VibeRoom Update Available (v" + newVersion + ")")
             .setContentText("Tap to download and install the new app version.")
             .setAutoCancel(true)
             .setContentIntent(pi);

@@ -39,7 +39,7 @@ public class UpdateInstallReceiver extends BroadcastReceiver {
         if (status == PackageInstaller.STATUS_FAILURE_CONFLICT
             || (rawMsg != null && (rawMsg.contains("INCOMPATIBLE") || rawMsg.toLowerCase().contains("signature")))) {
             UpdateManager.notifyInstallFailure(
-                "Installed version has a different signing key. Please uninstall the old TeleChat once, then install this update."
+                "Installed version has a different signing key. Please uninstall the old app once, then install this update."
             );
         } else if (status == PackageInstaller.STATUS_FAILURE_ABORTED) {
             UpdateManager.notifyInstallFailure("Installation cancelled.");

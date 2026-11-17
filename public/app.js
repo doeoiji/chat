@@ -433,7 +433,7 @@
       const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
       els.prefNotifications.checked = hasAndroidBridge ? Boolean(p.notifications) : (Boolean(p.notifications) && perm === 'granted');
       if (els.notifStatusHint) {
-        if (hasAndroidBridge) els.notifStatusHint.textContent = 'Handled by TeleChat Android app';
+        if (hasAndroidBridge) els.notifStatusHint.textContent = 'Handled by VibeRoom Android app';
         else if (perm === 'granted') els.notifStatusHint.textContent = 'Permission granted';
         else if (perm === 'denied') els.notifStatusHint.textContent = 'Blocked in browser site settings';
         else if (perm === 'default') els.notifStatusHint.textContent = 'Toggle on to request permission';
@@ -1884,7 +1884,7 @@
         });
         clearVerificationTimers();
         await onAuthenticated(data.user);
-        showToast(`Email verified! Welcome to TeleChat, @${data.user.username}!`, 'success');
+        showToast(`Email verified! Welcome to VibeRoom, @${data.user.username}!`, 'success');
       } catch (err) {
         els.verifyError.textContent = err.message;
         els.verifyError.classList.remove('hidden');
@@ -2061,7 +2061,7 @@
       const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
       if (hasAndroidBridge) {
         window.AndroidBridge.showNotification(
-          state.me ? (state.me.displayName || state.me.username) : 'TeleChat Test',
+          state.me ? (state.me.displayName || state.me.username) : 'VibeRoom Test',
           'Android notifications with profile photo are working!',
           state.activeChatId || '',
           `test_${Date.now()}`,
@@ -2074,11 +2074,11 @@
       const ok = await requestBrowserNotificationPermission();
       if (!ok) return;
       try {
-        const opts = { body: 'Browser notifications are working!', icon: '/icon-192.png', tag: 'telechat-test' };
+        const opts = { body: 'Browser notifications are working!', icon: '/icon-192.png', tag: 'viberoom-test' };
         if (swRegistration && typeof swRegistration.showNotification === 'function') {
-          await swRegistration.showNotification('TeleChat Test', opts);
+          await swRegistration.showNotification('VibeRoom Test', opts);
         } else {
-          new Notification('TeleChat Test', opts);
+          new Notification('VibeRoom Test', opts);
         }
         showToast('Sent browser test notification!', 'success');
       } catch (err) {

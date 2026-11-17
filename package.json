@@ -1,7 +1,7 @@
 {
-  "name": "telechat",
+  "name": "viberoom",
   "version": "1.0.0",
-  "description": "A smooth Telegram-inspired real-time web chat app with file-system user & chat log folders, valid email platform verification, user search, and image/file sharing.",
+  "description": "VibeRoom — A smooth multipurpose real-time chat, media sharing, voice/video & mini-games web and Android platform.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {
@@ -13,12 +13,14 @@
     "node": ">=18.0.0"
   },
   "keywords": [
+    "viberoom",
     "chat",
-    "telegram-ui",
     "messaging",
     "file-sharing",
     "realtime",
     "sse",
+    "pwa",
+    "android",
     "nodejs"
   ],
   "license": "MIT"

@@ -15,26 +15,26 @@ function escapeHtml(str) {
 }
 
 function buildVerificationEmail({ to, username, code, expiresMinutes }) {
-  const subject = `TeleChat Verification Code: ${code}`;
+  const subject = `VibeRoom Verification Code: ${code}`;
   const text = [
     `Hello @${username},`,
     '',
-    `Your TeleChat account verification code is: ${code}`,
+    `Your VibeRoom account verification code is: ${code}`,
     '',
     `This code expires in ${expiresMinutes} minutes.`,
     'If you did not request this signup, you can safely ignore this email.',
     '',
-    '— TeleChat'
+    '— VibeRoom'
   ].join('\r\n');
 
   const html = `<!DOCTYPE html>
 <html>
 <body style="margin:0;padding:24px;background:#0E1621;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#F5F5F5;">
   <div style="max-width:460px;margin:0 auto;background:#17212B;border-radius:16px;padding:28px;border:1px solid rgba(255,255,255,0.08);">
-    <div style="font-size:20px;font-weight:700;color:#64B5F6;margin-bottom:8px;">TeleChat</div>
+    <div style="font-size:20px;font-weight:700;color:#37AEE2;margin-bottom:8px;">VibeRoom</div>
     <h2 style="margin:0 0 12px;font-size:18px;color:#FFFFFF;">Verify your email address</h2>
     <p style="margin:0 0 18px;font-size:14px;line-height:1.5;color:#B8C7D4;">
-      Hi <strong>@${escapeHtml(username)}</strong>, enter the 6-digit code below to finish creating your TeleChat account:
+      Hi <strong>@${escapeHtml(username)}</strong>, enter the 6-digit code below to finish creating your VibeRoom account:
     </p>
     <div style="background:#242F3D;border-radius:12px;padding:16px;text-align:center;font-size:32px;font-weight:800;letter-spacing:8px;color:#FFFFFF;margin-bottom:18px;">
       ${escapeHtml(code)}
@@ -165,13 +165,13 @@ async function sendViaSmtp(smtp, mail) {
       throw new Error(`Unexpected SMTP greeting: ${greeting.code}`);
     }
 
-    let ehlo = await session.sendCmd('EHLO telechat.local', [250]);
+    let ehlo = await session.sendCmd('EHLO viberoom.local', [250]);
     const supportsStartTls = ehlo.lines.some((l) => /STARTTLS/i.test(l));
 
     if (!smtp.secure && supportsStartTls) {
       await session.sendCmd('STARTTLS', [220]);
       await session.upgradeTls();
-      ehlo = await session.sendCmd('EHLO telechat.local', [250]);
+      ehlo = await session.sendCmd('EHLO viberoom.local', [250]);
     }
 
     const authLine = ehlo.lines.find((l) => /AUTH/i.test(l)) || '';
@@ -189,7 +189,7 @@ async function sendViaSmtp(smtp, mail) {
     await session.sendCmd(`RCPT TO:<${mail.to}>`, [250, 251]);
     await session.sendCmd('DATA', [354]);
 
-    const boundary = `----TeleChatMail${Date.now().toString(16)}`;
+    const boundary = `----VibeRoomMail${Date.now().toString(16)}`;
     const mimeMsg = [
       `From: ${smtp.from}`,
       `To: <${mail.to}>`,
@@ -259,7 +259,7 @@ function createMailer(config) {
     await fsp.appendFile(logPath, entry, 'utf8');
 
     if (process.env.NODE_ENV !== 'test' && !process.env.NODE_TEST_CONTEXT) {
-      console.log(`[TeleChat Mailer - Dev Outbox] Verification code for ${to} (@${username}): ${code}`);
+      console.log(`[VibeRoom Mailer - Dev Outbox] Verification code for ${to} (@${username}): ${code}`);
     }
 
     return {

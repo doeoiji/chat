@@ -568,7 +568,7 @@ function createRouter({ config, auth, storage, hub, mailer }) {
     } catch (err) {
       const status = err.statusCode || 500;
       if (status >= 500) {
-        console.error('[TeleChat Error]', err);
+        console.error('[VibeRoom Error]', err);
       }
       if (!res.headersSent) {
         sendJson(res, status, { error: err.message || 'Internal server error.' });

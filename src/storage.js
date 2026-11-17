@@ -695,7 +695,7 @@ function createStorage(config) {
         };
         await writeJsonAtomic(metaPath, meta);
         await writeJsonAtomic(messagesPath, []);
-        const header = `# TeleChat Conversation Log: ${participants[0]} <-> ${participants[1]}\n# Created: ${now}\n`;
+        const header = `# VibeRoom Conversation Log: ${participants[0]} <-> ${participants[1]}\n# Created: ${now}\n`;
         await fsp.writeFile(logPath, header, 'utf8');
       }
 

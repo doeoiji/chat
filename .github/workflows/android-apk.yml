@@ -57,16 +57,16 @@ jobs:
         run: |
           VER=$(grep -E 'versionName\s+"' android/app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
           TAG="v${VER}"
-          APK="android/app/build/outputs/apk/release/TeleChat-${TAG}.apk"
+          APK="android/app/build/outputs/apk/release/VibeRoom-${TAG}.apk"
           cp android/app/build/outputs/apk/release/app-release.apk "$APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
-            gh release create "$TAG" "$APK" --title "TeleChat ${TAG}" --notes "TeleChat Android app ${TAG}" --latest
+            gh release create "$TAG" "$APK" --title "VibeRoom ${TAG}" --notes "VibeRoom Android app ${TAG}" --latest
           fi
 
-      - name: Upload TeleChat APK Artifact
+      - name: Upload VibeRoom APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TeleChat-release-apk
+          name: VibeRoom-release-apk
           path: android/app/build/outputs/apk/release/app-release.apk

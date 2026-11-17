@@ -1,7 +1,7 @@
 {
-  "name": "TeleChat",
-  "short_name": "TeleChat",
-  "description": "Smooth Telegram-style real-time messaging & file sharing",
+  "name": "VibeRoom",
+  "short_name": "VibeRoom",
+  "description": "VibeRoom — Chat with friends, connect, call & play together",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
