@@ -9,8 +9,11 @@ import android.app.Person;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.LocusId;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
+import android.content.pm.ShortcutInfo;
+import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
@@ -384,6 +387,9 @@ public class MessageService extends Service {
 
         String safeTitle = title != null && !title.isEmpty() ? title : "TeleChat";
         String safeBody = body != null && !body.isEmpty() ? body : "New message";
+        String shortcutId = (chatId != null && !chatId.isEmpty())
+            ? chatId
+            : ("chat_" + Math.abs(safeTitle.hashCode()));
 
         Bitmap avatarBmp = fetchAvatarBitmap(ctx, avatarUrl);
         if (avatarBmp == null) {
@@ -391,6 +397,7 @@ public class MessageService extends Service {
         }
 
         Intent openIntent = new Intent(ctx, MainActivity.class);
+        openIntent.setAction(Intent.ACTION_VIEW);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         if (chatId != null && !chatId.isEmpty()) {
             openIntent.putExtra(EXTRA_CHAT_ID, chatId);
@@ -398,7 +405,7 @@ public class MessageService extends Service {
 
         PendingIntent pendingIntent = PendingIntent.getActivity(
             ctx,
-            chatId != null ? chatId.hashCode() : 0,
+            shortcutId.hashCode(),
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
@@ -411,15 +418,51 @@ public class MessageService extends Service {
             .setLargeIcon(avatarBmp)
             .setContentTitle(safeTitle)
             .setContentText(safeBody)
+            .setCategory(Notification.CATEGORY_MESSAGE)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            Icon avatarIcon = Icon.createWithBitmap(avatarBmp);
             Person sender = new Person.Builder()
                 .setName(safeTitle)
-                .setIcon(Icon.createWithBitmap(avatarBmp))
+                .setKey(shortcutId)
+                .setIcon(avatarIcon)
                 .build();
-            Notification.MessagingStyle style = new Notification.MessagingStyle(sender)
+            Person me = new Person.Builder()
+                .setName("Me")
+                .setKey("me")
+                .build();
+
+            // Publish dynamic conversation shortcut so Android 11+ shows the large circular avatar directly (Messenger-style)
+            try {
+                ShortcutManager shortcutManager = ctx.getSystemService(ShortcutManager.class);
+                if (shortcutManager != null) {
+                    ShortcutInfo.Builder scBuilder = new ShortcutInfo.Builder(ctx, shortcutId)
+                        .setShortLabel(safeTitle)
+                        .setIcon(avatarIcon)
+                        .setIntent(openIntent);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        scBuilder.setLongLived(true)
+                            .setPerson(sender)
+                            .setLocusId(new LocusId(shortcutId));
+                    }
+                    ShortcutInfo shortcut = scBuilder.build();
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        shortcutManager.pushDynamicShortcut(shortcut);
+                    } else {
+                        shortcutManager.addDynamicShortcuts(Collections.singletonList(shortcut));
+                    }
+                    builder.setShortcutId(shortcutId);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        builder.setLocusId(new LocusId(shortcutId));
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+
+            Notification.MessagingStyle style = new Notification.MessagingStyle(me)
+                .setGroupConversation(false)
                 .addMessage(safeBody, System.currentTimeMillis(), sender);
             builder.setStyle(style);
         } else {
@@ -431,7 +474,6 @@ public class MessageService extends Service {
             builder.setDefaults(Notification.DEFAULT_ALL);
         }
 
-        int notifId = chatId != null && !chatId.isEmpty() ? chatId.hashCode() : (int) System.currentTimeMillis();
-        manager.notify(notifId, builder.build());
+        manager.notify(shortcutId.hashCode(), builder.build());
     }
 }
