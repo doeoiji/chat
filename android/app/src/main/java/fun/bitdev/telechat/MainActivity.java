@@ -48,19 +48,15 @@ public class MainActivity extends Activity {
         Window window = getWindow();
         window.setStatusBarColor(Color.parseColor("#17212B"));
         window.setNavigationBarColor(Color.parseColor("#0E1621"));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            WindowInsetsController controller = window.getInsetsController();
-            if (controller != null) {
-                controller.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
-            }
-        }
 
-        // Root container applies status-bar, navigation-bar, and IME insets cleanly (fixes Android 15 edge-to-edge overlap)
+        // Root container applies status-bar, cutout, navigation-bar, and IME insets cleanly (fixes Android 15 edge-to-edge overlap)
         FrameLayout rootContainer = new FrameLayout(this);
         rootContainer.setBackgroundColor(Color.parseColor("#17212B"));
         rootContainer.setOnApplyWindowInsetsListener((v, insets) -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
+                Insets bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime()
+                );
                 v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
                 return WindowInsets.CONSUMED;
             } else {
@@ -82,6 +78,14 @@ public class MainActivity extends Activity {
         ));
         setContentView(rootContainer);
         rootContainer.requestApplyInsets();
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.getDecorView();
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            }
+        }
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
