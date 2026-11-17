@@ -213,6 +213,7 @@
     prefEnterSend: $('pref-enter-send'),
     prefNotifications: $('pref-notifications'),
     notifStatusHint: $('notif-status-hint'),
+    testNotifBtn: $('test-notif-btn'),
     settingsResetBtn: $('settings-reset-btn'),
 
     toastContainer: $('toast-container')
@@ -509,16 +510,30 @@
     }
   }
 
-  async function notifyIncomingMessage({ chatId, senderUsername, senderName, bodyText }) {
+  function syncAndroidState(forceForeground) {
+    if (!window.AndroidBridge || typeof window.AndroidBridge.setAppState !== 'function') return;
+    const isFg = typeof forceForeground === 'boolean' ? forceForeground : !document.hidden;
+    try {
+      window.AndroidBridge.setAppState(
+        state.me ? state.me.username : '',
+        state.activeChatId || '',
+        Boolean(isFg)
+      );
+    } catch {
+      // Ignore bridge error
+    }
+  }
+
+  async function notifyIncomingMessage({ chatId, messageId, senderUsername, senderName, bodyText }) {
     if (!state.prefs.notifications) return;
     const appInBackground = document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus());
     const otherChat = chatId !== state.activeChatId;
     if (!appInBackground && !otherChat) return;
 
-    // 1. Native Android WebView bridge
+    // 1. Native Android WebView bridge (deduplicated with MessageService by messageId)
     if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
       try {
-        window.AndroidBridge.showNotification(senderName, bodyText, chatId);
+        window.AndroidBridge.showNotification(senderName, bodyText, chatId || '', messageId || '');
         return;
       } catch {
         // Fallback to browser Notification API
@@ -954,6 +969,7 @@
       }
 
       await markActiveChatRead();
+      syncAndroidState();
       const isMobileOrTouch = typeof window.matchMedia === 'function' &&
         window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
       if (isMobileOrTouch) {
@@ -1483,6 +1499,7 @@
           playChime('receive');
           notifyIncomingMessage({
             chatId: data.chatId,
+            messageId: data.message.id,
             senderUsername: data.message.sender,
             senderName,
             bodyText: bodyPreview
@@ -1494,6 +1511,7 @@
         showToast(`${senderName}: ${bodyPreview.slice(0, 60)}`);
         notifyIncomingMessage({
           chatId: data.chatId,
+          messageId: data.message.id,
           senderUsername: data.message.sender,
           senderName,
           bodyText: bodyPreview
@@ -1873,6 +1891,27 @@
       localStorage.setItem('telechat_notif_dismissed', '1');
       updateNotificationBanner();
     });
+    els.testNotifBtn.addEventListener('click', async () => {
+      const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+      if (hasAndroidBridge) {
+        window.AndroidBridge.showNotification('TeleChat Test', 'Android notifications are working!', state.activeChatId || '', `test_${Date.now()}`);
+        showToast('Sent Android test notification!', 'success');
+        return;
+      }
+      const ok = await requestBrowserNotificationPermission();
+      if (!ok) return;
+      try {
+        const opts = { body: 'Browser notifications are working!', icon: '/icon-192.png', tag: 'telechat-test' };
+        if (swRegistration && typeof swRegistration.showNotification === 'function') {
+          await swRegistration.showNotification('TeleChat Test', opts);
+        } else {
+          new Notification('TeleChat Test', opts);
+        }
+        showToast('Sent browser test notification!', 'success');
+      } catch (err) {
+        showToast(err.message || 'Could not display notification.', 'error');
+      }
+    });
 
     els.settingsResetBtn.addEventListener('click', () => {
       state.prefs = { ...DEFAULT_PREFS };
@@ -1920,6 +1959,9 @@
     // Mobile back button
     els.mobileBackBtn.addEventListener('click', () => {
       els.appShell.classList.remove('mobile-chat-open');
+      state.activeChatId = null;
+      syncAndroidState();
+      renderSidebar();
     });
 
     // In-Chat Search
@@ -2268,6 +2310,7 @@
     state.me = user;
     showAppShell();
     updateNotificationBanner();
+    syncAndroidState(true);
     connectRealtime();
     await refreshChats();
   }
@@ -2317,6 +2360,7 @@
   }
 
   // Expose clean hooks for the Android WebView wrapper
+  window.__telechatSyncState = (isFg) => syncAndroidState(isFg);
   window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
   window.__telechatHandleBack = () => {
     if (!els.lightboxModal.classList.contains('hidden')) { closeLightbox(); return true; }
@@ -2326,10 +2370,15 @@
     if (state.infoOpen) { toggleInfoDrawer(false); return true; }
     if (els.appShell.classList.contains('mobile-chat-open')) {
       els.appShell.classList.remove('mobile-chat-open');
+      state.activeChatId = null;
+      syncAndroidState();
+      renderSidebar();
       return true;
     }
     return false;
   };
+
+  document.addEventListener('visibilitychange', () => syncAndroidState(!document.hidden));
 
   async function boot() {
     applyPrefs();

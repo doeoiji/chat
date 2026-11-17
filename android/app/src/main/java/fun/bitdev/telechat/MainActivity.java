@@ -3,17 +3,17 @@ package fun.bitdev.telechat;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
@@ -22,15 +22,14 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import org.json.JSONObject;
 
 public class MainActivity extends Activity {
 
-    private static final String CHANNEL_ID = "telechat_messages";
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_NOTIF_PERMISSION = 1002;
-    private static final String EXTRA_CHAT_ID = "extra_chat_id";
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
@@ -49,13 +48,40 @@ public class MainActivity extends Activity {
         Window window = getWindow();
         window.setStatusBarColor(Color.parseColor("#17212B"));
         window.setNavigationBarColor(Color.parseColor("#0E1621"));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.setSystemBarsAppearance(0, WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            }
+        }
 
-        createNotificationChannel();
-        requestNotificationPermissionIfNeeded();
+        // Root container applies status-bar, navigation-bar, and IME insets cleanly (fixes Android 15 edge-to-edge overlap)
+        FrameLayout rootContainer = new FrameLayout(this);
+        rootContainer.setBackgroundColor(Color.parseColor("#17212B"));
+        rootContainer.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime());
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+                return WindowInsets.CONSUMED;
+            } else {
+                v.setPadding(
+                    insets.getSystemWindowInsetLeft(),
+                    insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(),
+                    insets.getSystemWindowInsetBottom()
+                );
+                return insets.consumeSystemWindowInsets();
+            }
+        });
 
         webView = new WebView(this);
         webView.setBackgroundColor(Color.parseColor("#0E1621"));
-        setContentView(webView);
+        rootContainer.addView(webView, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        setContentView(rootContainer);
+        rootContainer.requestApplyInsets();
 
         CookieManager cookieManager = CookieManager.getInstance();
         cookieManager.setAcceptCookie(true);
@@ -124,8 +150,28 @@ public class MainActivity extends Activity {
             }
         });
 
+        requestNotificationPermissionIfNeeded();
+        startMessageServiceIfPermitted();
         handleIntent(getIntent());
         webView.loadUrl(baseUrl);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) {
+            webView.onResume();
+            webView.evaluateJavascript("if (window.__telechatSyncState) window.__telechatSyncState(true);", null);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        CookieManager.getInstance().flush();
+        if (webView != null) {
+            webView.evaluateJavascript("if (window.__telechatSyncState) window.__telechatSyncState(false);", null);
+        }
     }
 
     @Override
@@ -137,7 +183,7 @@ public class MainActivity extends Activity {
 
     private void handleIntent(Intent intent) {
         if (intent == null) return;
-        String chatId = intent.getStringExtra(EXTRA_CHAT_ID);
+        String chatId = intent.getStringExtra(MessageService.EXTRA_CHAT_ID);
         if (chatId != null && !chatId.isEmpty()) {
             if (webView != null && webView.getProgress() == 100) {
                 openChatInWebView(chatId);
@@ -177,6 +223,14 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_NOTIF_PERMISSION && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            startMessageServiceIfPermitted();
+        }
+    }
+
+    @Override
     public void onBackPressed() {
         if (webView == null) {
             super.onBackPressed();
@@ -195,78 +249,55 @@ public class MainActivity extends Activity {
         );
     }
 
-    @Override
-    protected void onPause() {
-        super.onPause();
-        CookieManager.getInstance().flush();
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                "Chat Messages",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            channel.setDescription("Incoming message alerts from TeleChat");
-            channel.enableVibration(true);
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(channel);
-            }
+    private boolean hasNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
         }
+        return true;
     }
 
     private void requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            if (!hasNotificationPermission()) {
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIF_PERMISSION);
             }
         }
     }
 
+    private void startMessageServiceIfPermitted() {
+        if (!hasNotificationPermission()) return;
+        try {
+            Intent svc = new Intent(this, MessageService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(svc);
+            } else {
+                startService(svc);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     public class AndroidBridge {
         @JavascriptInterface
+        public void setAppState(String username, String chatId, boolean isForeground) {
+            CookieManager.getInstance().flush();
+            MessageService.updateAppState(username, chatId, isForeground);
+            if (username != null && !username.isEmpty()) {
+                runOnUiThread(MainActivity.this::startMessageServiceIfPermitted);
+            }
+        }
+
+        @JavascriptInterface
         public void showNotification(String title, String body, String chatId) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                    return;
-                }
+            showNotification(title, body, chatId, "");
+        }
+
+        @JavascriptInterface
+        public void showNotification(String title, String body, String chatId, String messageId) {
+            if (messageId != null && !messageId.isEmpty() && !MessageService.markNotifiedIfNew(messageId)) {
+                return;
             }
-
-            NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            if (manager == null) return;
-
-            Intent openIntent = new Intent(MainActivity.this, MainActivity.class);
-            openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            if (chatId != null) {
-                openIntent.putExtra(EXTRA_CHAT_ID, chatId);
-            }
-
-            PendingIntent pendingIntent = PendingIntent.getActivity(
-                MainActivity.this,
-                chatId != null ? chatId.hashCode() : 0,
-                openIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-            );
-
-            Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? new Notification.Builder(MainActivity.this, CHANNEL_ID)
-                : new Notification.Builder(MainActivity.this);
-
-            builder.setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle(title != null && !title.isEmpty() ? title : "TeleChat")
-                .setContentText(body != null ? body : "New message")
-                .setAutoCancel(true)
-                .setContentIntent(pendingIntent);
-
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-                builder.setPriority(Notification.PRIORITY_HIGH);
-                builder.setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE);
-            }
-
-            int notifId = chatId != null ? chatId.hashCode() : (int) System.currentTimeMillis();
-            manager.notify(notifId, builder.build());
+            MessageService.showMessageNotification(MainActivity.this, title, body, chatId);
         }
     }
 }
