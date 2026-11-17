@@ -5,40 +5,74 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class MainActivity extends Activity {
 
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_NOTIF_PERMISSION = 1002;
+    private static final long MAX_SHARED_FILE_BYTES = 25L * 1024L * 1024L;
+
+    private static final class SharedCachedFile {
+        final File file;
+        final String mimeType;
+        final String displayName;
+        final long sizeBytes;
+
+        SharedCachedFile(File file, String mimeType, String displayName, long sizeBytes) {
+            this.file = file;
+            this.mimeType = mimeType;
+            this.displayName = displayName;
+            this.sizeBytes = sizeBytes;
+        }
+    }
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private String baseUrl;
     private String baseHost;
     private String pendingOpenChatId;
+    private String pendingSharePayloadJson;
+    private volatile boolean pageLoaded = false;
     private boolean pendingOpenUpdates = false;
     private volatile boolean activityVisible = true;
     private UpdateManager updateManager;
+    private final Map<String, SharedCachedFile> sharedFilesMap = new ConcurrentHashMap<>();
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -106,6 +140,40 @@ public class MainActivity extends Activity {
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                pageLoaded = false;
+            }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                Uri uri = request.getUrl();
+                if (uri != null && baseHost != null && baseHost.equalsIgnoreCase(uri.getHost())) {
+                    String path = uri.getPath();
+                    if (path != null && path.startsWith("/__android_share__/")) {
+                        String id = path.substring("/__android_share__/".length());
+                        SharedCachedFile entry = sharedFilesMap.get(id);
+                        if (entry != null && entry.file.exists()) {
+                            try {
+                                Map<String, String> headers = new HashMap<>();
+                                headers.put("Cache-Control", "no-store");
+                                return new WebResourceResponse(
+                                    entry.mimeType,
+                                    null,
+                                    200,
+                                    "OK",
+                                    headers,
+                                    new FileInputStream(entry.file)
+                                );
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    }
+                }
+                return super.shouldInterceptRequest(view, request);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
                 String host = uri.getHost();
@@ -122,9 +190,15 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                pageLoaded = true;
                 CookieManager.getInstance().flush();
                 if (updateManager != null) {
                     pushUpdateStateToWebView(updateManager.toStateJson());
+                }
+                if (pendingSharePayloadJson != null) {
+                    String payload = pendingSharePayloadJson;
+                    pendingSharePayloadJson = null;
+                    deliverShareToWebView(payload);
                 }
                 if (pendingOpenUpdates) {
                     pendingOpenUpdates = false;
@@ -221,14 +295,149 @@ public class MainActivity extends Activity {
             }
             return;
         }
+        String action = intent.getAction();
+        if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            handleShareIntent(intent);
+            return;
+        }
         String chatId = intent.getStringExtra(MessageService.EXTRA_CHAT_ID);
         if (chatId != null && !chatId.isEmpty()) {
-            if (webView != null && webView.getProgress() == 100) {
+            if (webView != null && pageLoaded) {
                 openChatInWebView(chatId);
             } else {
                 pendingOpenChatId = chatId;
             }
         }
+    }
+
+    private void handleShareIntent(Intent intent) {
+        String action = intent.getAction();
+        String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+        String extraText = intent.getStringExtra(Intent.EXTRA_TEXT);
+        String combinedText = "";
+        if (extraText != null && !extraText.trim().isEmpty()) {
+            if (subject != null && !subject.trim().isEmpty() && !extraText.contains(subject.trim())) {
+                combinedText = subject.trim() + "\n" + extraText.trim();
+            } else {
+                combinedText = extraText.trim();
+            }
+        } else if (subject != null && !subject.trim().isEmpty()) {
+            combinedText = subject.trim();
+        }
+
+        final String sharedText = combinedText;
+        final ArrayList<Uri> uris = new ArrayList<>();
+        if (Intent.ACTION_SEND.equals(action)) {
+            Uri single = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (single != null) uris.add(single);
+        } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            ArrayList<Uri> multi = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (multi != null) uris.addAll(multi);
+        }
+
+        new Thread(() -> {
+            try {
+                File shareDir = new File(getCacheDir(), "shared");
+                if (!shareDir.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    shareDir.mkdirs();
+                }
+
+                JSONArray filesJson = new JSONArray();
+                int count = 0;
+                for (Uri uri : uris) {
+                    if (uri == null || count >= 10) break;
+                    SharedCachedFile cached = copySharedUriToCache(shareDir, uri);
+                    if (cached != null) {
+                        String token = UUID.randomUUID().toString();
+                        sharedFilesMap.put(token, cached);
+                        JSONObject fileObj = new JSONObject();
+                        fileObj.put("url", baseUrl + "/__android_share__/" + token);
+                        fileObj.put("name", cached.displayName);
+                        fileObj.put("mime", cached.mimeType);
+                        fileObj.put("size", cached.sizeBytes);
+                        filesJson.put(fileObj);
+                        count++;
+                    }
+                }
+
+                if (sharedText.isEmpty() && filesJson.length() == 0) return;
+
+                JSONObject payload = new JSONObject();
+                payload.put("text", sharedText);
+                payload.put("files", filesJson);
+                String payloadStr = payload.toString();
+
+                runOnUiThread(() -> {
+                    if (webView != null && pageLoaded) {
+                        deliverShareToWebView(payloadStr);
+                    } else {
+                        pendingSharePayloadJson = payloadStr;
+                    }
+                });
+            } catch (Exception ignored) {
+            }
+        }, "VibeRoom-ShareTarget").start();
+    }
+
+    private SharedCachedFile copySharedUriToCache(File shareDir, Uri uri) {
+        try {
+            String mime = getContentResolver().getType(uri);
+            String name = queryDisplayName(uri);
+            if (mime == null || mime.trim().isEmpty()) {
+                String ext = name != null && name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase() : "";
+                mime = !ext.isEmpty() ? MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) : null;
+            }
+            if (mime == null || mime.trim().isEmpty()) {
+                mime = "application/octet-stream";
+            }
+            if (name == null || name.trim().isEmpty()) {
+                String ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime);
+                name = "shared_" + System.currentTimeMillis() + (ext != null ? "." + ext : "");
+            }
+
+            File outFile = new File(shareDir, UUID.randomUUID().toString() + ".bin");
+            long total = 0;
+            try (InputStream is = getContentResolver().openInputStream(uri);
+                 FileOutputStream fos = new FileOutputStream(outFile)) {
+                if (is == null) return null;
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = is.read(buf)) > 0) {
+                    total += n;
+                    if (total > MAX_SHARED_FILE_BYTES) {
+                        fos.close();
+                        //noinspection ResultOfMethodCallIgnored
+                        outFile.delete();
+                        return null;
+                    }
+                    fos.write(buf, 0, n);
+                }
+                fos.flush();
+            }
+            return new SharedCachedFile(outFile, mime, name, total);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String queryDisplayName(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) return cursor.getString(idx);
+            }
+        } catch (Exception ignored) {
+        }
+        return uri.getLastPathSegment();
+    }
+
+    private void deliverShareToWebView(String payloadJson) {
+        if (webView == null || payloadJson == null) return;
+        webView.post(() -> webView.evaluateJavascript(
+            "if (window.__telechatReceiveShare) { window.__telechatReceiveShare(" + payloadJson + "); }",
+            null
+        ));
     }
 
     private void openUpdatesInWebView() {
@@ -352,6 +561,17 @@ public class MainActivity extends Activity {
             if (updateManager != null) {
                 updateManager.checkForUpdate(manual, !manual);
             }
+        }
+
+        @JavascriptInterface
+        public void clearSharedFiles() {
+            for (SharedCachedFile item : sharedFilesMap.values()) {
+                if (item != null && item.file != null) {
+                    //noinspection ResultOfMethodCallIgnored
+                    item.file.delete();
+                }
+            }
+            sharedFilesMap.clear();
         }
 
         @JavascriptInterface

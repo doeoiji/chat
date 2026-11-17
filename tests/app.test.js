@@ -588,6 +588,53 @@ test('full user registration, folder storage, search, chat logs, and image/file 
   const dlMigrated = await req(migratedNotesUrl, { headers: { Cookie: renameRes.cookie } });
   assert.equal(dlMigrated.status, 200);
   assert.equal(dlMigrated.body.toString('utf8'), 'hello file content');
+
+  // 14. Profile birthday setting, validation, clearing, and unread counter check
+  const badBirthdayRes = await req('/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: renameRes.cookie },
+    body: JSON.stringify({ birthday: '2099-02-30' })
+  });
+  assert.equal(badBirthdayRes.status, 400);
+
+  const setBirthdayRes = await req('/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: renameRes.cookie },
+    body: JSON.stringify({ birthday: '2001-05-14' })
+  });
+  assert.equal(setBirthdayRes.status, 200);
+  assert.equal(setBirthdayRes.body.user.birthday, '2001-05-14');
+
+  const bobChatsBefore = await req('/api/chats', { headers: { Cookie: bobReg.cookie } });
+  assert.equal(bobChatsBefore.status, 200);
+  assert.equal(bobChatsBefore.body.chats[0].peer.birthday, '2001-05-14');
+
+  const sendUnreadMsg = await req(`/api/chats/${renamedChatId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: renameRes.cookie },
+    body: JSON.stringify({ text: 'Unread counter check!' })
+  });
+  assert.equal(sendUnreadMsg.status, 201);
+
+  const bobChatsUnread = await req('/api/chats', { headers: { Cookie: bobReg.cookie } });
+  assert.equal(bobChatsUnread.status, 200);
+  assert.ok(bobChatsUnread.body.chats[0].unreadCount >= 1);
+
+  const bobReadRes = await req(`/api/chats/${renamedChatId}/read`, {
+    method: 'POST',
+    headers: { Cookie: bobReg.cookie }
+  });
+  assert.equal(bobReadRes.status, 200);
+  const bobChatsCleared = await req('/api/chats', { headers: { Cookie: bobReg.cookie } });
+  assert.equal(bobChatsCleared.body.chats[0].unreadCount, 0);
+
+  const clearBirthdayRes = await req('/api/users/me', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Cookie: renameRes.cookie },
+    body: JSON.stringify({ birthday: '' })
+  });
+  assert.equal(clearBirthdayRes.status, 200);
+  assert.equal(clearBirthdayRes.body.user.birthday, null);
 });
 
 test('frontend app.js boots cleanly and matches all HTML element IDs', async () => {

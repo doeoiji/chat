@@ -839,6 +839,55 @@ button, input, textarea {
   padding: 4px;
 }
 
+/* Telegram-style Chat Filter Tabs (All Chats / Unread Counter) */
+.sidebar-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+.sidebar-tab {
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 9px 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.sidebar-tab:hover {
+  color: var(--text-primary);
+}
+.sidebar-tab.active {
+  color: var(--accent-bright);
+  border-bottom-color: var(--accent-bright);
+}
+.sidebar-tab-badge {
+  min-width: 20px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.sidebar-tab.active .sidebar-tab-badge {
+  background: var(--accent-bright);
+}
+
 .sidebar-section-title {
   padding: 10px 16px 6px;
   font-size: 12px;
@@ -894,6 +943,35 @@ button, input, textarea {
 }
 .notif-allow-btn:hover {
   background: var(--accent-hover);
+}
+.share-target-banner {
+  margin: 8px 10px 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(55, 174, 226, 0.16);
+  border: 1px solid rgba(55, 174, 226, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  animation: slideDownFade 200ms ease;
+}
+.share-target-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.share-target-banner-text strong {
+  font-size: 13px;
+  color: var(--accent-bright);
+}
+.share-target-banner-text span {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .setting-sub-hint {
   display: block;
@@ -1095,6 +1173,18 @@ button, input, textarea {
 }
 .chat-row:hover {
   background: var(--bg-sidebar-hover);
+}
+.chat-row:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: -2px;
+  background: var(--bg-sidebar-hover);
+}
+.draft-prefix {
+  color: var(--danger);
+  font-weight: 600;
+}
+.chat-row.active .draft-prefix {
+  color: #FFD1D4;
 }
 .chat-row.active {
   background: var(--bg-sidebar-active);
@@ -1345,6 +1435,27 @@ button, input, textarea {
 }
 .msg-row.group-start {
   margin-top: 8px;
+}
+.swipe-reply-indicator {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%) scale(0.6);
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-pill);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  opacity: 0;
+  pointer-events: none;
+  transition: background var(--transition-fast);
+}
+.swipe-reply-indicator.ready {
+  background: var(--accent);
 }
 
 .msg-bubble {
@@ -1785,6 +1896,36 @@ button, input, textarea {
   align-items: center;
   justify-content: center;
   transition: transform var(--transition-fast), color var(--transition-fast);
+}
+.scroll-unread-badge {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+.unread-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 10px -16px 6px;
+  padding: 5px 12px;
+  background: rgba(82, 136, 193, 0.16);
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 .scroll-bottom-btn:hover {
   transform: translateY(-2px);
@@ -2804,6 +2945,23 @@ button, input, textarea {
   font-size: 11.5px;
   color: var(--text-muted);
   margin-top: 2px;
+}
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.settings-birthday-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.birthday-today {
+  color: var(--accent-bright);
+  font-weight: 600;
 }
 
 /* Lightbox */

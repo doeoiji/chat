@@ -258,7 +258,8 @@ function createRouter({ config, auth, storage, hub, mailer }) {
         const result = await storage.updateAccountProfile(me.username, {
           username: body.username,
           displayName: body.displayName,
-          bio: body.bio
+          bio: body.bio,
+          birthday: body.birthday
         });
         const extraHeaders = {};
         if (result.renamed && result.user) {

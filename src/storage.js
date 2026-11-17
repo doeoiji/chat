@@ -25,6 +25,36 @@ function sanitizeFilename(name) {
   return base.slice(0, 120);
 }
 
+function normalizeBirthday(input) {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (!match) {
+    const err = new Error('Please enter a valid birthday date (YYYY-MM-DD).');
+    err.statusCode = 400;
+    throw err;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(d.getTime()) ||
+    d.getUTCFullYear() !== year ||
+    d.getUTCMonth() + 1 !== month ||
+    d.getUTCDate() !== day ||
+    year < 1900 ||
+    d.getTime() > Date.now()
+  ) {
+    const err = new Error('Please enter a valid birthday date.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return raw;
+}
+
 function getDmChatId(userA, userB) {
   const a = String(userA).trim().toLowerCase();
   const b = String(userB).trim().toLowerCase();
@@ -103,6 +133,7 @@ function createStorage(config) {
       email: user.email,
       emailVerified: Boolean(user.emailVerified),
       bio: user.bio || '',
+      birthday: user.birthday || null,
       avatarColor: user.avatarColor,
       avatarUrl: user.avatarUrl || null,
       createdAt: user.createdAt,
@@ -567,6 +598,7 @@ function createStorage(config) {
   }
 
   async function updateUserProfile(username, updates) {
+    const normalizedBirthday = normalizeBirthday(updates.birthday);
     const folder = userFolder(username);
     if (!folder) return null;
     return withLock(`user:${username}`, async () => {
@@ -580,6 +612,9 @@ function createStorage(config) {
       }
       if (typeof updates.bio === 'string') {
         user.bio = updates.bio.trim().slice(0, 160);
+      }
+      if (normalizedBirthday !== undefined) {
+        user.birthday = normalizedBirthday;
       }
       if (typeof updates.avatarUrl === 'string' || updates.avatarUrl === null) {
         user.avatarUrl = updates.avatarUrl;
@@ -683,6 +718,7 @@ function createStorage(config) {
   }
 
   async function updateAccountProfile(currentUsername, updates = {}) {
+    const normalizedBirthday = normalizeBirthday(updates.birthday);
     const oldClean = String(currentUsername || '').trim().toLowerCase();
     const hasNewUsername = typeof updates.username === 'string';
     const newClean = hasNewUsername ? updates.username.trim().toLowerCase() : oldClean;
@@ -744,6 +780,9 @@ function createStorage(config) {
         }
         if (typeof updates.bio === 'string') {
           user.bio = updates.bio.trim().slice(0, 160);
+        }
+        if (normalizedBirthday !== undefined) {
+          user.birthday = normalizedBirthday;
         }
         const oldAvatarPrefix = `/api/users/${encodeURIComponent(oldClean)}/avatar/`;
         if (typeof user.avatarUrl === 'string' && user.avatarUrl.startsWith(oldAvatarPrefix)) {

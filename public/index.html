@@ -297,6 +297,24 @@
         </div>
       </div>
 
+      <div id="share-target-banner" class="share-target-banner hidden">
+        <div class="share-target-banner-text">
+          <strong>Ready to Share</strong>
+          <span id="share-target-summary">Pick a chat below to send</span>
+        </div>
+        <button id="share-target-cancel" class="icon-btn-sm" type="button" aria-label="Cancel share">✕</button>
+      </div>
+
+      <div id="sidebar-tabs" class="sidebar-tabs" role="tablist">
+        <button id="tab-filter-all" class="sidebar-tab active" type="button" data-chat-filter="all">
+          <span>All Chats</span>
+        </button>
+        <button id="tab-filter-unread" class="sidebar-tab" type="button" data-chat-filter="unread">
+          <span>Unread</span>
+          <span id="unread-tab-badge" class="sidebar-tab-badge hidden">0</span>
+        </button>
+      </div>
+
       <div id="sidebar-section-title" class="sidebar-section-title hidden"></div>
       <div id="sidebar-list" class="sidebar-list" role="list"></div>
     </aside>
@@ -369,6 +387,7 @@
             </div>
           </div>
           <button id="scroll-bottom-btn" class="scroll-bottom-btn hidden" type="button" aria-label="Scroll to bottom">
+            <span id="scroll-unread-badge" class="scroll-unread-badge hidden">0</span>
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2"
               stroke-linecap="round" stroke-linejoin="round">
               <polyline points="6 9 12 15 18 9" />
@@ -464,6 +483,10 @@
           <span class="info-label">Bio</span>
           <span id="info-bio" class="info-value"></span>
         </div>
+        <div id="info-birthday-row" class="info-row hidden">
+          <span class="info-label">Birthday</span>
+          <span id="info-birthday" class="info-value"></span>
+        </div>
       </div>
       <div class="info-tabs">
         <button id="info-tab-media" class="info-tab active" type="button">Media</button>
@@ -532,6 +555,13 @@
         <div class="field-group">
           <label for="profile-bio">Bio</label>
           <textarea id="profile-bio" rows="2" maxlength="160" placeholder="A few words about yourself..."></textarea>
+        </div>
+        <div class="field-group">
+          <div class="field-label-row">
+            <label for="profile-birthday">Birthday</label>
+            <button id="profile-clear-birthday-btn" class="link-btn hidden" type="button">Clear</button>
+          </div>
+          <input id="profile-birthday" type="date" min="1900-01-01" />
         </div>
         <div class="modal-footer">
           <button id="profile-cancel-btn" class="secondary-btn" type="button">Cancel</button>
@@ -645,12 +675,16 @@
                   <span id="settings-email" class="settings-account-email"></span>
                   <span class="verified-pill">✓ Verified</span>
                 </div>
+                <div id="settings-birthday-row" class="settings-birthday-line hidden">
+                  <span>🎂</span>
+                  <span id="settings-birthday"></span>
+                </div>
               </div>
             </div>
 
             <div class="settings-action-list">
               <button id="settings-open-profile" class="settings-action-row" type="button">
-                <span>Edit Display Name, Bio &amp; Photo</span>
+                <span>Edit Profile, Username &amp; Birthday</span>
                 <span class="settings-row-chevron">›</span>
               </button>
               <button id="settings-goto-themes" class="settings-action-row" type="button">

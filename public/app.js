@@ -39,6 +39,9 @@
     pendingFiles: [],
     replyTo: null,
     searchQuery: '',
+    sidebarFilter: 'all',
+    unreadBelowCount: 0,
+    firstUnreadMsgId: null,
     browseMode: false,
     searchResults: [],
     typingPeers: new Map(), // chatId -> timeoutId
@@ -48,6 +51,9 @@
     eventSource: null,
     theme: localStorage.getItem('telechat_theme') || 'dark',
     prefs: loadPrefs(),
+    drafts: loadDrafts(),
+    pendingShare: null,
+    queuedAndroidShare: null,
     sending: false,
     chatSearch: {
       open: false,
@@ -125,6 +131,11 @@
     notifAllowBtn: $('notif-allow-btn'),
     notifDismissBtn: $('notif-dismiss-btn'),
     sidebarSectionTitle: $('sidebar-section-title'),
+    sidebarTabs: $('sidebar-tabs'),
+    unreadTabBadge: $('unread-tab-badge'),
+    shareTargetBanner: $('share-target-banner'),
+    shareTargetSummary: $('share-target-summary'),
+    shareTargetCancel: $('share-target-cancel'),
     sidebarList: $('sidebar-list'),
 
     chatEmptyState: $('chat-empty-state'),
@@ -149,6 +160,7 @@
     messagesList: $('messages-list'),
     typingBubbleRow: $('typing-bubble-row'),
     scrollBottomBtn: $('scroll-bottom-btn'),
+    scrollUnreadBadge: $('scroll-unread-badge'),
     dropOverlay: $('drop-overlay'),
 
     replyBanner: $('reply-banner'),
@@ -175,6 +187,8 @@
     infoEmail: $('info-email'),
     infoBioRow: $('info-bio-row'),
     infoBio: $('info-bio'),
+    infoBirthdayRow: $('info-birthday-row'),
+    infoBirthday: $('info-birthday'),
     infoTabMedia: $('info-tab-media'),
     infoTabFiles: $('info-tab-files'),
     infoSharedContent: $('info-shared-content'),
@@ -198,6 +212,8 @@
     profileUsername: $('profile-username'),
     profileDisplayName: $('profile-displayname'),
     profileBio: $('profile-bio'),
+    profileBirthday: $('profile-birthday'),
+    profileClearBirthdayBtn: $('profile-clear-birthday-btn'),
 
     settingsModal: $('settings-modal'),
     settingsModalBackdrop: $('settings-modal-backdrop'),
@@ -214,6 +230,8 @@
     settingsDisplayName: $('settings-displayname'),
     settingsUsername: $('settings-username'),
     settingsEmail: $('settings-email'),
+    settingsBirthdayRow: $('settings-birthday-row'),
+    settingsBirthday: $('settings-birthday'),
     settingsOpenProfile: $('settings-open-profile'),
     settingsGotoThemes: $('settings-goto-themes'),
     themeCardsGrid: $('theme-cards-grid'),
@@ -254,6 +272,60 @@
   // =========================================================================
   // Utilities
   // =========================================================================
+  function formatCompactCount(count) {
+    const n = Number(count || 0);
+    if (n <= 0) return '0';
+    if (n < 1000) return String(Math.floor(n));
+    if (n < 1000000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+    return `${(n / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
+  }
+
+  function formatBirthdayLabel(yyyyMmDd) {
+    if (!yyyyMmDd || typeof yyyyMmDd !== 'string') return null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(yyyyMmDd.trim());
+    if (!match) return null;
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const utcDate = new Date(Date.UTC(year, month - 1, day));
+    if (Number.isNaN(utcDate.getTime())) return null;
+
+    const now = new Date();
+    const isToday = now.getMonth() + 1 === month && now.getDate() === day;
+    let age = now.getFullYear() - year;
+    if (now.getMonth() + 1 < month || (now.getMonth() + 1 === month && now.getDate() < day)) {
+      age--;
+    }
+    const formattedDate = utcDate.toLocaleDateString([], {
+      timeZone: 'UTC',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+    const ageLabel = age >= 0 ? ` (${age} yrs)` : '';
+    return {
+      text: `${formattedDate}${ageLabel}${isToday ? ' • Birthday today! 🎉' : ''}`,
+      isToday
+    };
+  }
+
+  function updateGlobalUnreadCounters() {
+    const totalUnread = state.chats.reduce((sum, c) => sum + Number(c.unreadCount || 0), 0);
+    if (els.unreadTabBadge) {
+      els.unreadTabBadge.textContent = formatCompactCount(totalUnread);
+      els.unreadTabBadge.classList.toggle('hidden', totalUnread <= 0);
+    }
+    if (els.scrollUnreadBadge) {
+      const below = Number(state.unreadBelowCount || 0);
+      els.scrollUnreadBadge.textContent = formatCompactCount(below);
+      els.scrollUnreadBadge.classList.toggle('hidden', below <= 0);
+    }
+    if (typeof document !== 'undefined') {
+      const baseTitle = 'VibeRoom — Chat, Calls & Mini-Games';
+      document.title = totalUnread > 0 ? `(${formatCompactCount(totalUnread)}) ${baseTitle}` : baseTitle;
+    }
+  }
+
   function escapeHtml(str) {
     return String(str || '')
       .replace(/&/g, '&amp;')
@@ -344,6 +416,107 @@
     const parts = String(filename || '').split('.');
     const ext = parts.length > 1 ? parts.pop().slice(0, 4) : 'FILE';
     return ext.toUpperCase();
+  }
+
+  function loadDrafts() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('viberoom_drafts') || '{}');
+      return raw && typeof raw === 'object' ? raw : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveChatDraft(chatId, rawText) {
+    if (!chatId) return;
+    const text = typeof rawText === 'string' ? rawText : '';
+    const hadDraft = Boolean(state.drafts[chatId] && state.drafts[chatId].text);
+    const hasDraft = text.trim().length > 0;
+    if (hasDraft) {
+      state.drafts[chatId] = { text, updatedAt: Date.now() };
+    } else {
+      delete state.drafts[chatId];
+    }
+    try {
+      localStorage.setItem('viberoom_drafts', JSON.stringify(state.drafts));
+    } catch {
+      // Ignore storage quota errors
+    }
+    if (hadDraft !== hasDraft) {
+      renderSidebar();
+    }
+  }
+
+  function clearPendingShare(clearNative = true) {
+    state.pendingShare = null;
+    if (els.shareTargetBanner) els.shareTargetBanner.classList.add('hidden');
+    if (clearNative && window.AndroidBridge && typeof window.AndroidBridge.clearSharedFiles === 'function') {
+      try { window.AndroidBridge.clearSharedFiles(); } catch { }
+    }
+  }
+
+  function handleIncomingAndroidShare(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    if (!state.me) {
+      state.queuedAndroidShare = payload;
+      return;
+    }
+    const text = typeof payload.text === 'string' ? payload.text : '';
+    const files = Array.isArray(payload.files) ? payload.files : [];
+    if (!text && files.length === 0) return;
+
+    state.pendingShare = { text, files };
+    closeMessageContextMenu();
+    closeLightbox();
+    closeProfileModal();
+    closeSettingsModal();
+    closeDrawer();
+    els.appShell.classList.remove('mobile-chat-open');
+
+    const parts = [];
+    if (files.length > 0) parts.push(`${files.length} file${files.length > 1 ? 's' : ''}`);
+    if (text) parts.push('text');
+    if (els.shareTargetSummary) {
+      els.shareTargetSummary.textContent = `Sharing ${parts.join(' + ')} — tap any chat to attach`;
+    }
+    if (els.shareTargetBanner) {
+      els.shareTargetBanner.classList.remove('hidden');
+    }
+  }
+
+  async function applyPendingShareToActiveChat() {
+    if (!state.pendingShare || !state.activeChatId) return;
+    const share = state.pendingShare;
+    state.pendingShare = null;
+    if (els.shareTargetBanner) els.shareTargetBanner.classList.add('hidden');
+
+    if (share.text) {
+      const existing = els.messageInput.value.trim();
+      els.messageInput.value = existing ? `${existing}\n${share.text}` : share.text;
+      saveChatDraft(state.activeChatId, els.messageInput.value);
+      autoResizeInput();
+    }
+
+    if (Array.isArray(share.files) && share.files.length > 0) {
+      const fetchedFiles = [];
+      for (const f of share.files) {
+        try {
+          const resp = await fetch(f.url);
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          fetchedFiles.push(new File([blob], f.name || 'shared', { type: f.mime || blob.type || 'application/octet-stream' }));
+        } catch {
+          // Ignore single file read failure
+        }
+      }
+      if (fetchedFiles.length > 0) {
+        addPendingFiles(fetchedFiles);
+      }
+    }
+
+    if (window.AndroidBridge && typeof window.AndroidBridge.clearSharedFiles === 'function') {
+      try { window.AndroidBridge.clearSharedFiles(); } catch { }
+    }
   }
 
   function showToast(message, type = 'info') {
@@ -659,6 +832,17 @@
       els.settingsUsername.textContent = `@${state.me.username}`;
       els.settingsEmail.textContent = state.me.email;
 
+      if (els.settingsBirthdayRow && els.settingsBirthday) {
+        const bdayInfo = formatBirthdayLabel(state.me.birthday);
+        if (bdayInfo) {
+          els.settingsBirthdayRow.classList.remove('hidden');
+          els.settingsBirthday.textContent = bdayInfo.text;
+          els.settingsBirthday.classList.toggle('birthday-today', bdayInfo.isToday);
+        } else {
+          els.settingsBirthdayRow.classList.add('hidden');
+        }
+      }
+
       if (els.settingsMobileAvatar) renderAvatar(els.settingsMobileAvatar, state.me);
       if (els.settingsMobileDisplayName) els.settingsMobileDisplayName.textContent = displayName;
       if (els.settingsMobileSub) els.settingsMobileSub.textContent = `@${state.me.username} • ${state.me.email}`;
@@ -947,6 +1131,14 @@
     const isSearching = state.searchQuery.trim().length > 0 || state.browseMode;
     els.clearSearchBtn.classList.toggle('hidden', !state.searchQuery.trim() && !state.browseMode);
 
+    if (els.sidebarTabs) {
+      els.sidebarTabs.classList.toggle('hidden', isSearching);
+      els.sidebarTabs.querySelectorAll('[data-chat-filter]').forEach((tabBtn) => {
+        tabBtn.classList.toggle('active', tabBtn.dataset.chatFilter === state.sidebarFilter);
+      });
+    }
+    updateGlobalUnreadCounters();
+
     if (isSearching) {
       els.sidebarSectionTitle.classList.remove('hidden');
       els.sidebarSectionTitle.textContent = state.searchQuery.trim()
@@ -990,6 +1182,10 @@
     }
 
     els.sidebarSectionTitle.classList.add('hidden');
+    const visibleChats = state.sidebarFilter === 'unread'
+      ? state.chats.filter((c) => Number(c.unreadCount || 0) > 0)
+      : state.chats;
+
     if (state.chats.length === 0) {
       els.sidebarList.innerHTML = `
         <div class="sidebar-empty">
@@ -1005,24 +1201,47 @@
       return;
     }
 
-    els.sidebarList.innerHTML = state.chats.map((chat) => {
+    if (visibleChats.length === 0 && state.sidebarFilter === 'unread') {
+      els.sidebarList.innerHTML = `
+        <div class="sidebar-empty">
+          All caught up! No unread messages.<br/>
+          <div>
+            <button id="empty-all-chats-btn" class="secondary-btn" type="button">Show All Chats</button>
+          </div>
+        </div>
+      `;
+      const showAllBtn = $('empty-all-chats-btn');
+      if (showAllBtn) {
+        showAllBtn.addEventListener('click', () => {
+          state.sidebarFilter = 'all';
+          renderSidebar();
+        });
+      }
+      return;
+    }
+
+    els.sidebarList.innerHTML = visibleChats.map((chat) => {
       const peer = chat.peer;
       const isOnline = state.onlineUsers.has(peer.username) || peer.online;
       const isActive = state.activeChatId === chat.id;
       const isTyping = state.typingPeers.has(chat.id);
       const last = chat.lastMessage;
-      let preview = 'Start chatting...';
+      const draftObj = state.drafts[chat.id];
+      const draftText = draftObj && draftObj.text ? draftObj.text.trim() : '';
+      let previewHtml = escapeHtml('Start chatting...');
       if (isTyping) {
-        preview = 'typing...';
+        previewHtml = escapeHtml('typing...');
+      } else if (draftText) {
+        previewHtml = `<span class="draft-prefix">Draft:</span> ${escapeHtml(draftText.replace(/\s+/g, ' '))}`;
       } else if (last) {
         const prefix = last.sender === state.me.username ? 'You: ' : '';
-        preview = `${prefix}${last.preview || ''}`;
+        previewHtml = escapeHtml(`${prefix}${last.preview || ''}`);
       }
       const timeStr = last ? formatSidebarTime(last.createdAt) : '';
-      const unread = chat.unreadCount || 0;
+      const unread = Number(chat.unreadCount || 0);
 
       return `
-        <div class="chat-row ${isActive ? 'active' : ''}" data-open-user="${escapeHtml(peer.username)}" role="listitem">
+        <div class="chat-row ${isActive ? 'active' : ''}" data-open-user="${escapeHtml(peer.username)}" role="listitem" tabindex="0">
           <div class="avatar-wrap">
             <div class="avatar" style="background: ${escapeHtml(peer.avatarColor || 'var(--accent)')}">
               ${peer.avatarUrl ? `<img src="${escapeHtml(peer.avatarUrl)}" alt=""/>` : escapeHtml(initialsFor(peer))}
@@ -1035,8 +1254,8 @@
               <span class="chat-row-time">${escapeHtml(timeStr)}</span>
             </div>
             <div class="chat-row-bottom">
-              <span class="chat-row-preview">${escapeHtml(preview)}</span>
-              ${unread > 0 ? `<span class="unread-badge">${unread}</span>` : ''}
+              <span class="chat-row-preview">${previewHtml}</span>
+              ${unread > 0 ? `<span class="unread-badge">${escapeHtml(formatCompactCount(unread))}</span>` : ''}
             </div>
           </div>
         </div>
@@ -1117,6 +1336,9 @@
 
   async function openChatWithUser(targetUsername) {
     try {
+      if (state.activeChatId && els.messageInput) {
+        saveChatDraft(state.activeChatId, els.messageInput.value);
+      }
       const data = await api('/api/chats/open', {
         method: 'POST',
         body: { targetUsername }
@@ -1125,12 +1347,24 @@
       state.activeChatId = data.chat.id;
       state.activePeer = data.chat.peer;
       state.messages = data.messages || [];
+      state.unreadBelowCount = 0;
+      const firstUnread = state.me
+        ? state.messages.find((m) => m.sender !== state.me.username && (!Array.isArray(m.readBy) || !m.readBy.includes(state.me.username)))
+        : null;
+      state.firstUnreadMsgId = firstUnread ? firstUnread.id : null;
       state.replyTo = null;
       els.replyBanner.classList.add('hidden');
       state.chatSearch = { open: false, query: '', matches: [], index: -1 };
       els.chatSearchBar.classList.add('hidden');
       els.chatSearchInput.value = '';
       els.chatSearchCount.textContent = '0 / 0';
+
+      const savedDraft = state.drafts[state.activeChatId];
+      els.messageInput.value = savedDraft && savedDraft.text ? savedDraft.text : '';
+      autoResizeInput();
+      if (state.pendingShare) {
+        await applyPendingShareToActiveChat();
+      }
 
       if (state.activePeer.online) state.onlineUsers.add(state.activePeer.username);
 
@@ -1250,6 +1484,10 @@
       if (dateStr !== lastDateStr) {
         lastDateStr = dateStr;
         htmlParts.push(`<div class="date-separator">${escapeHtml(formatDateSeparator(msg.createdAt))}</div>`);
+      }
+
+      if (state.firstUnreadMsgId && msg.id === state.firstUnreadMsgId) {
+        htmlParts.push('<div class="unread-divider">Unread Messages</div>');
       }
 
       const isMine = msg.sender === state.me.username;
@@ -1434,6 +1672,7 @@
       }
 
       els.messageInput.value = '';
+      saveChatDraft(chatId, '');
       autoResizeInput();
       clearPendingFiles();
       clearReply();
@@ -1516,6 +1755,17 @@
       els.infoBio.textContent = p.bio;
     } else {
       els.infoBioRow.classList.add('hidden');
+    }
+
+    if (els.infoBirthdayRow && els.infoBirthday) {
+      const bdayInfo = formatBirthdayLabel(p.birthday);
+      if (bdayInfo) {
+        els.infoBirthdayRow.classList.remove('hidden');
+        els.infoBirthday.textContent = bdayInfo.text;
+        els.infoBirthday.classList.toggle('birthday-today', bdayInfo.isToday);
+      } else {
+        els.infoBirthdayRow.classList.add('hidden');
+      }
     }
 
     const allAttachments = [];
@@ -1623,6 +1873,10 @@
     if (els.profileUsername) els.profileUsername.value = state.me.username || '';
     els.profileDisplayName.value = state.me.displayName || state.me.username;
     els.profileBio.value = state.me.bio || '';
+    if (els.profileBirthday) els.profileBirthday.value = state.me.birthday || '';
+    if (els.profileClearBirthdayBtn) {
+      els.profileClearBirthdayBtn.classList.toggle('hidden', !state.me.birthday);
+    }
     els.profileModal.classList.remove('hidden');
   }
 
@@ -1702,6 +1956,12 @@
         const wasNearBottom = isNearBottom();
         if (!state.messages.some((m) => m.id === data.message.id)) {
           state.messages.push(data.message);
+          if (isIncoming && !wasNearBottom) {
+            state.unreadBelowCount = (state.unreadBelowCount || 0) + 1;
+            if (!state.firstUnreadMsgId) state.firstUnreadMsgId = data.message.id;
+          } else if (!isIncoming) {
+            state.firstUnreadMsgId = null;
+          }
           renderMessages(wasNearBottom);
           if (state.infoOpen) renderInfoDrawer();
         }
@@ -1716,9 +1976,18 @@
             senderAvatarColor,
             bodyText: bodyPreview
           });
-          await markActiveChatRead();
+          if (wasNearBottom) {
+            await markActiveChatRead();
+          } else {
+            updateGlobalUnreadCounters();
+          }
         }
       } else if (isIncoming) {
+        const existingChat = state.chats.find((c) => c.id === data.chatId);
+        if (existingChat) {
+          existingChat.unreadCount = Number(existingChat.unreadCount || 0) + 1;
+          renderSidebar();
+        }
         playChime('receive');
         showToast(`${senderName}: ${bodyPreview.slice(0, 60)}`);
         notifyIncomingMessage({
@@ -2025,8 +2294,15 @@
       closeDrawer();
       openProfileModal();
     });
+    if (els.shareTargetCancel) {
+      els.shareTargetCancel.addEventListener('click', () => clearPendingShare(true));
+    }
+
     els.menuLogout.addEventListener('click', async () => {
       closeDrawer();
+      clearPendingShare(true);
+      state.drafts = {};
+      try { localStorage.removeItem('viberoom_drafts'); } catch { }
       await api('/api/auth/logout', { method: 'POST' }).catch(() => { });
       if (state.eventSource) state.eventSource.close();
       state.me = null;
@@ -2209,11 +2485,37 @@
       }
     });
 
-    // Sidebar click delegation
+    // Sidebar filter tabs (All Chats / Unread)
+    if (els.sidebarTabs) {
+      els.sidebarTabs.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-chat-filter]');
+        if (!btn) return;
+        state.sidebarFilter = btn.dataset.chatFilter === 'unread' ? 'unread' : 'all';
+        renderSidebar();
+      });
+    }
+
+    // Sidebar click & keyboard delegation
     els.sidebarList.addEventListener('click', (e) => {
       const row = e.target.closest('[data-open-user]');
       if (!row) return;
       openChatWithUser(row.dataset.openUser);
+    });
+    els.sidebarList.addEventListener('keydown', (e) => {
+      const row = e.target.closest('.chat-row[data-open-user]');
+      if (!row) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        openChatWithUser(row.dataset.openUser);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const next = row.nextElementSibling;
+        if (next && next.classList.contains('chat-row')) next.focus();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const prev = row.previousElementSibling;
+        if (prev && prev.classList.contains('chat-row')) prev.focus();
+      }
     });
 
     // Mobile back button
@@ -2324,10 +2626,21 @@
 
     // Scroll to bottom button
     els.messagesViewport.addEventListener('scroll', () => {
-      els.scrollBottomBtn.classList.toggle('hidden', isNearBottom());
+      const nearBottom = isNearBottom();
+      els.scrollBottomBtn.classList.toggle('hidden', nearBottom);
+      if (nearBottom && state.unreadBelowCount > 0) {
+        state.unreadBelowCount = 0;
+        updateGlobalUnreadCounters();
+        markActiveChatRead();
+      }
     });
     els.scrollBottomBtn.addEventListener('click', () => {
       els.messagesViewport.scrollTo({ top: els.messagesViewport.scrollHeight, behavior: 'smooth' });
+      if (state.unreadBelowCount > 0) {
+        state.unreadBelowCount = 0;
+        updateGlobalUnreadCounters();
+        markActiveChatRead();
+      }
     });
 
     // Telegram-style Message Context Menu (Left-click on Desktop Website / Long-press on Mobile App)
@@ -2575,10 +2888,11 @@
     els.messagesList.addEventListener('click', handleMediaOrActionClick);
     els.infoSharedContent.addEventListener('click', handleMediaOrActionClick);
 
-    // Long-press on mobile app / touch devices to open the Telegram-style menu & reactions
+    // Mobile Swipe-to-Reply & Long-Press Context Menu on touch devices
     let longPressTimer = null;
     let longPressStartX = 0;
     let longPressStartY = 0;
+    let swipeState = null;
 
     function clearLongPressTimer() {
       if (longPressTimer) {
@@ -2587,8 +2901,27 @@
       }
     }
 
+    function finishSwipeGesture(triggerReply) {
+      if (!swipeState) return;
+      const { row, bubble, indicator, msgId, crossedThreshold } = swipeState;
+      swipeState = null;
+      bubble.style.transition = 'transform 180ms cubic-bezier(0.22, 1, 0.36, 1)';
+      bubble.style.transform = '';
+      setTimeout(() => {
+        if (bubble) bubble.style.transition = '';
+      }, 200);
+      if (indicator && indicator.parentNode === row) {
+        indicator.remove();
+      }
+      if (triggerReply && crossedThreshold && msgId) {
+        suppressNextClickUntil = Date.now() + 260;
+        setReply(msgId);
+      }
+    }
+
     els.messagesList.addEventListener('touchstart', (e) => {
       clearLongPressTimer();
+      finishSwipeGesture(false);
       if (!e.touches || e.touches.length !== 1) return;
       if (e.target.closest('button, video, audio')) return;
       const bubble = e.target.closest('.msg-bubble');
@@ -2600,8 +2933,21 @@
       longPressStartY = touch.clientY;
       const msgId = row.dataset.msgId;
 
+      swipeState = {
+        row,
+        bubble,
+        msgId,
+        startX: touch.clientX,
+        startY: touch.clientY,
+        decided: false,
+        active: false,
+        crossedThreshold: false,
+        indicator: null
+      };
+
       longPressTimer = setTimeout(() => {
         longPressTimer = null;
+        swipeState = null;
         suppressNextClickUntil = Date.now() + 550;
         if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
           try { navigator.vibrate(14); } catch { }
@@ -2611,16 +2957,60 @@
     }, { passive: true });
 
     els.messagesList.addEventListener('touchmove', (e) => {
-      if (!longPressTimer || !e.touches || !e.touches[0]) return;
-      const dx = Math.abs(e.touches[0].clientX - longPressStartX);
-      const dy = Math.abs(e.touches[0].clientY - longPressStartY);
-      if (dx > 10 || dy > 10) {
+      if (!e.touches || !e.touches[0]) return;
+      const dx = e.touches[0].clientX - longPressStartX;
+      const dy = e.touches[0].clientY - longPressStartY;
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
         clearLongPressTimer();
+      }
+      if (!swipeState) return;
+
+      if (!swipeState.decided) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        swipeState.decided = true;
+        if (Math.abs(dy) > Math.abs(dx) || dx >= 0) {
+          swipeState = null;
+          return;
+        }
+        swipeState.active = true;
+        swipeState.bubble.style.transition = 'none';
+        const indicator = document.createElement('span');
+        indicator.className = 'swipe-reply-indicator';
+        indicator.textContent = '↩';
+        swipeState.row.appendChild(indicator);
+        swipeState.indicator = indicator;
+      }
+
+      if (swipeState.active) {
+        const clamped = Math.max(-72, Math.min(0, dx * 0.72));
+        swipeState.bubble.style.transform = `translateX(${clamped}px)`;
+        const ratio = Math.min(1, Math.abs(clamped) / 44);
+        if (swipeState.indicator) {
+          swipeState.indicator.style.opacity = String(ratio);
+          swipeState.indicator.style.transform = `translateY(-50%) scale(${0.6 + ratio * 0.45})`;
+        }
+        const nowCrossed = clamped <= -44;
+        if (nowCrossed && !swipeState.crossedThreshold) {
+          swipeState.crossedThreshold = true;
+          if (swipeState.indicator) swipeState.indicator.classList.add('ready');
+          if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+            try { navigator.vibrate(10); } catch { }
+          }
+        } else if (!nowCrossed && swipeState.crossedThreshold) {
+          swipeState.crossedThreshold = false;
+          if (swipeState.indicator) swipeState.indicator.classList.remove('ready');
+        }
       }
     }, { passive: true });
 
-    els.messagesList.addEventListener('touchend', clearLongPressTimer, { passive: true });
-    els.messagesList.addEventListener('touchcancel', clearLongPressTimer, { passive: true });
+    els.messagesList.addEventListener('touchend', () => {
+      clearLongPressTimer();
+      finishSwipeGesture(true);
+    }, { passive: true });
+    els.messagesList.addEventListener('touchcancel', () => {
+      clearLongPressTimer();
+      finishSwipeGesture(false);
+    }, { passive: true });
     els.messagesList.addEventListener('contextmenu', (e) => {
       if (isMobileTouchMode() && e.target.closest('.msg-bubble')) {
         e.preventDefault();
@@ -2643,6 +3033,9 @@
 
     els.messageInput.addEventListener('input', () => {
       autoResizeInput();
+      if (state.activeChatId) {
+        saveChatDraft(state.activeChatId, els.messageInput.value);
+      }
       if (els.messageInput.value.trim()) sendTypingSignal(true);
       else sendTypingSignal(false);
     });
@@ -2821,12 +3214,23 @@
       }
     });
 
+    if (els.profileClearBirthdayBtn && els.profileBirthday) {
+      els.profileClearBirthdayBtn.addEventListener('click', () => {
+        els.profileBirthday.value = '';
+        els.profileClearBirthdayBtn.classList.add('hidden');
+      });
+      els.profileBirthday.addEventListener('change', () => {
+        els.profileClearBirthdayBtn.classList.toggle('hidden', !els.profileBirthday.value);
+      });
+    }
+
     els.profileForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
         const payload = {
           displayName: els.profileDisplayName.value.trim(),
-          bio: els.profileBio.value.trim()
+          bio: els.profileBio.value.trim(),
+          birthday: els.profileBirthday ? els.profileBirthday.value.trim() : undefined
         };
         if (els.profileUsername) {
           payload.username = els.profileUsername.value.trim().toLowerCase();
@@ -2861,14 +3265,31 @@
         openChatSearch();
         return;
       }
+      if (e.altKey && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && state.me && state.chats.length > 0) {
+        e.preventDefault();
+        const curIdx = state.chats.findIndex((c) => c.id === state.activeChatId);
+        const delta = e.key === 'ArrowDown' ? 1 : -1;
+        const nextIdx = curIdx < 0
+          ? 0
+          : (curIdx + delta + state.chats.length) % state.chats.length;
+        const nextChat = state.chats[nextIdx];
+        if (nextChat && nextChat.peer) {
+          openChatWithUser(nextChat.peer.username);
+        }
+        return;
+      }
       if (e.key === 'Escape') {
-        closeMessageContextMenu();
+        if (els.msgContextOverlay && !els.msgContextOverlay.classList.contains('hidden')) {
+          closeMessageContextMenu();
+          return;
+        }
         closeLightbox();
         closeProfileModal();
         closeSettingsModal();
         closeDrawer();
         closeChatSearch();
         els.emojiPopover.classList.add('hidden');
+        if (state.replyTo) clearReply();
       }
     });
   }
@@ -2880,6 +3301,11 @@
     syncAndroidState(true);
     connectRealtime();
     await refreshChats();
+    if (state.queuedAndroidShare) {
+      const queued = state.queuedAndroidShare;
+      state.queuedAndroidShare = null;
+      handleIncomingAndroidShare(queued);
+    }
   }
 
   function setupMobileViewportSync() {
@@ -2930,6 +3356,7 @@
   window.__telechatSyncState = (isFg) => syncAndroidState(isFg);
   window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
   window.__telechatOnUpdateStatus = (info) => updateAppUpdateUI(info);
+  window.__telechatReceiveShare = (payload) => handleIncomingAndroidShare(payload);
   window.__telechatOpenUpdates = () => {
     openSettingsModal('updates');
     updateAppUpdateUI();
@@ -2953,6 +3380,10 @@
       state.activeChatId = null;
       syncAndroidState();
       renderSidebar();
+      return true;
+    }
+    if (state.pendingShare) {
+      clearPendingShare(true);
       return true;
     }
     return false;
