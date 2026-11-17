@@ -29,22 +29,11 @@ jobs:
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Cache Android Debug Keystore for Consistent In-Place Updates
-        if: env.HAS_KEYSTORE != 'true'
-        env:
-          HAS_KEYSTORE: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 != '' }}
+      - name: Cache Android Debug Keystore
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: telechat-debug-keystore-v1
-
-      - name: Restore Debug Keystore from Secret (if configured)
-        if: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 != '' }}
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
-        run: |
-          mkdir -p ~/.android
-          echo "$KEYSTORE_B64" | base64 --decode > ~/.android/debug.keystore
 
       - name: Ensure Debug Keystore Exists
         run: |
