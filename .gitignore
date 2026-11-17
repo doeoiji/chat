@@ -21,3 +21,10 @@ data/outbox/
 *.tmp
 .DS_Store
 Thumbs.db
+
+# Android Studio / Gradle build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk

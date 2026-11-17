@@ -17,6 +17,18 @@
     'fakeinbox.com', 'sharklasers.com', 'burnermail.io', 'mail.tm', 'mail.gw'
   ];
 
+  const DEFAULT_PREFS = {
+    theme: 'dark',
+    accent: 'blue',
+    wallpaper: true,
+    corners: 'classic',
+    fontSize: 'md',
+    sounds: true,
+    animations: true,
+    enterToSend: true,
+    notifications: true
+  };
+
   const state = {
     me: null,
     chats: [],
@@ -34,7 +46,14 @@
     infoTab: 'media',
     eventSource: null,
     theme: localStorage.getItem('telechat_theme') || 'dark',
+    prefs: loadPrefs(),
     sending: false,
+    chatSearch: {
+      open: false,
+      query: '',
+      matches: [],
+      index: -1
+    },
     verification: {
       id: null,
       maskedEmail: '',
@@ -85,15 +104,20 @@
     drawerEmail: $('drawer-email'),
     drawerThemeBtn: $('drawer-theme-btn'),
     themeIcon: $('theme-icon'),
-    menuThemeLabel: $('menu-theme-label'),
+    drawerSettingsBtn: $('drawer-settings-btn'),
     menuFindUsers: $('menu-find-users'),
     menuEditProfile: $('menu-edit-profile'),
+    menuSettings: $('menu-settings'),
     menuToggleTheme: $('menu-toggle-theme'),
+    menuThemeLabel: $('menu-theme-label'),
     menuLogout: $('menu-logout'),
 
     sidebarSearch: $('sidebar-search'),
     clearSearchBtn: $('clear-search-btn'),
     browseUsersBtn: $('browse-users-btn'),
+    notifBanner: $('notif-banner'),
+    notifAllowBtn: $('notif-allow-btn'),
+    notifDismissBtn: $('notif-dismiss-btn'),
     sidebarSectionTitle: $('sidebar-section-title'),
     sidebarList: $('sidebar-list'),
 
@@ -105,10 +129,19 @@
     chatPeerDot: $('chat-peer-dot'),
     chatPeerName: $('chat-peer-name'),
     chatPeerStatus: $('chat-peer-status'),
+    toggleChatSearchBtn: $('toggle-chat-search-btn'),
     toggleInfoBtn: $('toggle-info-btn'),
+
+    chatSearchBar: $('chat-search-bar'),
+    chatSearchInput: $('chat-search-input'),
+    chatSearchCount: $('chat-search-count'),
+    chatSearchPrev: $('chat-search-prev'),
+    chatSearchNext: $('chat-search-next'),
+    chatSearchClose: $('chat-search-close'),
 
     messagesViewport: $('messages-viewport'),
     messagesList: $('messages-list'),
+    typingBubbleRow: $('typing-bubble-row'),
     scrollBottomBtn: $('scroll-bottom-btn'),
     dropOverlay: $('drop-overlay'),
 
@@ -157,6 +190,30 @@
     profileAvatarInput: $('profile-avatar-input'),
     profileDisplayName: $('profile-displayname'),
     profileBio: $('profile-bio'),
+
+    settingsModal: $('settings-modal'),
+    settingsModalBackdrop: $('settings-modal-backdrop'),
+    settingsModalClose: $('settings-modal-close'),
+    settingsModalTitle: $('settings-modal-title'),
+    settingsBackBtn: $('settings-back-btn'),
+    settingsNav: $('settings-nav'),
+    settingsAvatar: $('settings-avatar'),
+    settingsDisplayName: $('settings-displayname'),
+    settingsUsername: $('settings-username'),
+    settingsEmail: $('settings-email'),
+    settingsOpenProfile: $('settings-open-profile'),
+    settingsGotoThemes: $('settings-goto-themes'),
+    themeCardsGrid: $('theme-cards-grid'),
+    accentSwatches: $('accent-swatches'),
+    prefWallpaper: $('pref-wallpaper'),
+    prefCorners: $('pref-corners'),
+    prefFontSize: $('pref-fontsize'),
+    prefSounds: $('pref-sounds'),
+    prefAnimations: $('pref-animations'),
+    prefEnterSend: $('pref-enter-send'),
+    prefNotifications: $('pref-notifications'),
+    notifStatusHint: $('notif-status-hint'),
+    settingsResetBtn: $('settings-reset-btn'),
 
     toastContainer: $('toast-container')
   };
@@ -285,18 +342,276 @@
   }
 
   // =========================================================================
-  // Theme
+  // Preferences, Themes & Sound Effects
   // =========================================================================
-  function applyTheme(theme) {
-    state.theme = theme === 'light' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', state.theme);
-    localStorage.setItem('telechat_theme', state.theme);
-    els.themeIcon.textContent = state.theme === 'dark' ? '☀️' : '🌙';
-    els.menuThemeLabel.textContent = state.theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode';
+  function loadPrefs() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('telechat_prefs') || 'null');
+      const legacyTheme = localStorage.getItem('telechat_theme');
+      return {
+        ...DEFAULT_PREFS,
+        ...(legacyTheme ? { theme: legacyTheme } : {}),
+        ...(raw && typeof raw === 'object' ? raw : {})
+      };
+    } catch {
+      return { ...DEFAULT_PREFS };
+    }
   }
 
-  function toggleTheme() {
-    applyTheme(state.theme === 'dark' ? 'light' : 'dark');
+  function savePrefs() {
+    localStorage.setItem('telechat_prefs', JSON.stringify(state.prefs));
+    localStorage.setItem('telechat_theme', state.prefs.theme);
+  }
+
+  function applyPrefs() {
+    const p = state.prefs;
+    state.theme = p.theme;
+    const root = document.documentElement;
+    root.setAttribute('data-theme', p.theme || 'dark');
+    root.setAttribute('data-accent', p.accent || 'blue');
+    root.setAttribute('data-wallpaper', p.wallpaper ? 'on' : 'off');
+    root.setAttribute('data-corners', p.corners || 'classic');
+    root.setAttribute('data-fontsize', p.fontSize || 'md');
+    root.setAttribute('data-animations', p.animations ? 'on' : 'off');
+    const isLight = p.theme === 'light';
+    if (els.themeIcon) els.themeIcon.textContent = isLight ? '🌙' : '☀️';
+    if (els.menuThemeLabel) els.menuThemeLabel.textContent = isLight ? 'Switch to Dark Mode' : 'Switch to Light Mode';
+    syncSettingsUI();
+  }
+
+  function toggleDarkLightTheme() {
+    if (state.prefs.theme === 'light') {
+      const prevDark = state.prefs.lastDarkTheme && state.prefs.lastDarkTheme !== 'light'
+        ? state.prefs.lastDarkTheme
+        : 'dark';
+      state.prefs.theme = prevDark;
+    } else {
+      state.prefs.lastDarkTheme = state.prefs.theme || 'dark';
+      state.prefs.theme = 'light';
+    }
+    savePrefs();
+    applyPrefs();
+  }
+
+  function syncSettingsUI() {
+    const p = state.prefs;
+    if (els.themeCardsGrid) {
+      els.themeCardsGrid.querySelectorAll('[data-theme-choice]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.themeChoice === p.theme);
+      });
+    }
+    if (els.accentSwatches) {
+      els.accentSwatches.querySelectorAll('[data-accent]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.accent === p.accent);
+      });
+    }
+    if (els.prefWallpaper) els.prefWallpaper.checked = Boolean(p.wallpaper);
+    if (els.prefSounds) els.prefSounds.checked = Boolean(p.sounds);
+    if (els.prefAnimations) els.prefAnimations.checked = Boolean(p.animations);
+    if (els.prefEnterSend) els.prefEnterSend.checked = Boolean(p.enterToSend);
+    if (els.prefNotifications) {
+      const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+      const perm = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported';
+      els.prefNotifications.checked = hasAndroidBridge ? Boolean(p.notifications) : (Boolean(p.notifications) && perm === 'granted');
+      if (els.notifStatusHint) {
+        if (hasAndroidBridge) els.notifStatusHint.textContent = 'Handled by TeleChat Android app';
+        else if (perm === 'granted') els.notifStatusHint.textContent = 'Permission granted';
+        else if (perm === 'denied') els.notifStatusHint.textContent = 'Blocked in browser site settings';
+        else if (perm === 'default') els.notifStatusHint.textContent = 'Toggle on to request permission';
+        else els.notifStatusHint.textContent = 'Not supported in this browser';
+      }
+    }
+
+    if (els.prefCorners) {
+      els.prefCorners.querySelectorAll('[data-corner]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.corner === p.corners);
+      });
+    }
+    if (els.prefFontSize) {
+      els.prefFontSize.querySelectorAll('[data-size]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.size === p.fontSize);
+      });
+    }
+  }
+
+  let swRegistration = null;
+  async function registerServiceWorker() {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    try {
+      swRegistration = await navigator.serviceWorker.register('/sw.js');
+      navigator.serviceWorker.addEventListener('message', (ev) => {
+        if (ev.data && ev.data.type === 'open_chat') {
+          openChatByIdOrSender(ev.data.chatId, ev.data.sender);
+        }
+      });
+    } catch {
+      // Ignore registration failure (e.g. insecure origin)
+    }
+  }
+
+  function updateNotificationBanner() {
+    if (!els.notifBanner) return;
+    const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+    if (hasAndroidBridge || typeof Notification === 'undefined') {
+      els.notifBanner.classList.add('hidden');
+      return;
+    }
+    const dismissed = localStorage.getItem('telechat_notif_dismissed') === '1';
+    const shouldShow = Notification.permission === 'default' && !dismissed && Boolean(state.me);
+    els.notifBanner.classList.toggle('hidden', !shouldShow);
+  }
+
+  async function requestBrowserNotificationPermission() {
+    if (typeof Notification === 'undefined') {
+      showToast('Browser notifications are not supported here.', 'error');
+      return false;
+    }
+    if (Notification.permission === 'granted') {
+      state.prefs.notifications = true;
+      savePrefs();
+      syncSettingsUI();
+      updateNotificationBanner();
+      return true;
+    }
+    if (Notification.permission === 'denied') {
+      showToast('Notifications are blocked in browser settings.', 'error');
+      syncSettingsUI();
+      return false;
+    }
+    const res = await Notification.requestPermission();
+    if (res === 'granted') {
+      state.prefs.notifications = true;
+      savePrefs();
+      showToast('Notifications enabled!', 'success');
+    } else {
+      state.prefs.notifications = false;
+      savePrefs();
+    }
+    syncSettingsUI();
+    updateNotificationBanner();
+    return res === 'granted';
+  }
+
+  async function openChatByIdOrSender(chatId, senderUsername) {
+    if (senderUsername && state.me && senderUsername !== state.me.username) {
+      await openChatWithUser(senderUsername);
+      return;
+    }
+    if (chatId && state.me) {
+      const chat = state.chats.find((c) => c.id === chatId);
+      if (chat && chat.peer) {
+        await openChatWithUser(chat.peer.username);
+        return;
+      }
+      const parts = String(chatId).replace(/^dm_/, '').split('__');
+      const peer = parts.find((p) => p !== state.me.username);
+      if (peer) await openChatWithUser(peer);
+    }
+  }
+
+  async function notifyIncomingMessage({ chatId, senderUsername, senderName, bodyText }) {
+    if (!state.prefs.notifications) return;
+    const appInBackground = document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus());
+    const otherChat = chatId !== state.activeChatId;
+    if (!appInBackground && !otherChat) return;
+
+    // 1. Native Android WebView bridge
+    if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
+      try {
+        window.AndroidBridge.showNotification(senderName, bodyText, chatId);
+        return;
+      } catch {
+        // Fallback to browser Notification API
+      }
+    }
+
+    // 2. Browser Notification API (via Service Worker on Android Chrome, or direct Notification on desktop)
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const options = {
+      body: bodyText,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: `telechat-${chatId}`,
+      renotify: true,
+      data: { chatId, sender: senderUsername }
+    };
+    try {
+      if (swRegistration && typeof swRegistration.showNotification === 'function') {
+        await swRegistration.showNotification(senderName, options);
+        return;
+      }
+      const n = new Notification(senderName, options);
+      n.onclick = () => {
+        window.focus();
+        openChatByIdOrSender(chatId, senderUsername);
+        n.close();
+      };
+    } catch {
+      // Ignore notification permission errors
+    }
+  }
+
+  let audioCtx = null;
+  function playChime(kind) {
+    if (!state.prefs.sounds) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtx) audioCtx = new Ctx();
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => { });
+
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      const now = audioCtx.currentTime;
+      if (kind === 'send') {
+        osc.frequency.setValueAtTime(520, now);
+        osc.frequency.exponentialRampToValueAtTime(760, now + 0.08);
+        gain.gain.setValueAtTime(0.035, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.11);
+      } else {
+        osc.frequency.setValueAtTime(660, now);
+        osc.frequency.exponentialRampToValueAtTime(880, now + 0.1);
+        gain.gain.setValueAtTime(0.045, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.16);
+      }
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + 0.17);
+    } catch {
+      // Ignore Web Audio restrictions
+    }
+  }
+
+  function openSettingsModal(initialTab = 'general') {
+    if (state.me) {
+      renderAvatar(els.settingsAvatar, state.me);
+      els.settingsDisplayName.textContent = state.me.displayName || state.me.username;
+      els.settingsUsername.textContent = `@${state.me.username}`;
+      els.settingsEmail.textContent = state.me.email;
+    }
+    syncSettingsUI();
+    switchSettingsTab(initialTab);
+    els.settingsModal.classList.remove('hidden');
+  }
+
+  function closeSettingsModal() {
+    els.settingsModal.classList.add('hidden');
+  }
+
+  function switchSettingsTab(tab) {
+    const valid = ['general', 'themes', 'chat'].includes(tab) ? tab : 'general';
+    els.settingsNav.querySelectorAll('[data-settings-tab]').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.settingsTab === valid);
+    });
+    ['general', 'themes', 'chat'].forEach((name) => {
+      const panel = $(`settings-panel-${name}`);
+      if (panel) panel.classList.toggle('hidden', name !== valid);
+    });
+    const titles = { general: 'Settings', themes: 'Settings — Themes', chat: 'Settings — Sounds & Behavior' };
+    els.settingsModalTitle.textContent = titles[valid] || 'Settings';
+    els.settingsBackBtn.classList.toggle('hidden', valid === 'general');
   }
 
   // =========================================================================
@@ -574,6 +889,16 @@
     els.chatPeerDot.classList.toggle('hidden', !isOnline);
     els.chatPeerStatus.className = 'chat-peer-status';
 
+    if (els.typingBubbleRow) {
+      const wasHidden = els.typingBubbleRow.classList.contains('hidden');
+      els.typingBubbleRow.classList.toggle('hidden', !isTyping);
+      if (isTyping && wasHidden && isNearBottom()) {
+        requestAnimationFrame(() => {
+          els.messagesViewport.scrollTop = els.messagesViewport.scrollHeight;
+        });
+      }
+    }
+
     if (isTyping) {
       els.chatPeerStatus.textContent = 'typing...';
       els.chatPeerStatus.classList.add('typing');
@@ -601,6 +926,10 @@
       state.messages = data.messages || [];
       state.replyTo = null;
       els.replyBanner.classList.add('hidden');
+      state.chatSearch = { open: false, query: '', matches: [], index: -1 };
+      els.chatSearchBar.classList.add('hidden');
+      els.chatSearchInput.value = '';
+      els.chatSearchCount.textContent = '0 / 0';
 
       if (state.activePeer.online) state.onlineUsers.add(state.activePeer.username);
 
@@ -625,7 +954,15 @@
       }
 
       await markActiveChatRead();
-      els.messageInput.focus();
+      const isMobileOrTouch = typeof window.matchMedia === 'function' &&
+        window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
+      if (isMobileOrTouch) {
+        if (document.activeElement && typeof document.activeElement.blur === 'function') {
+          document.activeElement.blur();
+        }
+      } else {
+        els.messageInput.focus();
+      }
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -738,6 +1075,7 @@
       const actionsHtml = `
         <div class="msg-actions">
           <button class="msg-action-btn" type="button" data-reply-msg="${escapeHtml(msg.id)}" title="Reply">↩</button>
+          ${msg.text ? `<button class="msg-action-btn" type="button" data-copy-msg="${escapeHtml(msg.id)}" title="Copy">📋</button>` : ''}
           ${QUICK_REACTIONS.map((e) => `<button class="msg-action-btn" type="button" data-react-msg="${escapeHtml(msg.id)}" data-emoji="${e}" title="React ${e}">${e}</button>`).join('')}
           ${isMine ? `<button class="msg-action-btn" type="button" data-delete-msg="${escapeHtml(msg.id)}" title="Delete">🗑</button>` : ''}
         </div>
@@ -907,6 +1245,7 @@
         renderMessages(true);
         if (state.infoOpen) renderInfoDrawer();
       }
+      playChime('send');
       await refreshChats();
     } catch (err) {
       showToast(err.message, 'error');
@@ -1125,6 +1464,14 @@
 
     es.addEventListener('new_message', async (ev) => {
       const data = JSON.parse(ev.data);
+      const isIncoming = data.message.sender !== state.me.username;
+      const senderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
+      const bodyPreview = data.message.text
+        ? data.message.text.slice(0, 120)
+        : (data.message.attachments && data.message.attachments[0]
+          ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
+          : 'New message');
+
       if (data.chatId === state.activeChatId) {
         const wasNearBottom = isNearBottom();
         if (!state.messages.some((m) => m.id === data.message.id)) {
@@ -1132,13 +1479,25 @@
           renderMessages(wasNearBottom);
           if (state.infoOpen) renderInfoDrawer();
         }
-        if (data.message.sender !== state.me.username) {
+        if (isIncoming) {
+          playChime('receive');
+          notifyIncomingMessage({
+            chatId: data.chatId,
+            senderUsername: data.message.sender,
+            senderName,
+            bodyText: bodyPreview
+          });
           await markActiveChatRead();
         }
-      } else if (data.message.sender !== state.me.username) {
-        const senderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
-        const preview = data.message.text || 'Sent an attachment';
-        showToast(`${senderName}: ${preview.slice(0, 60)}`);
+      } else if (isIncoming) {
+        playChime('receive');
+        showToast(`${senderName}: ${bodyPreview.slice(0, 60)}`);
+        notifyIncomingMessage({
+          chatId: data.chatId,
+          senderUsername: data.message.sender,
+          senderName,
+          bodyText: bodyPreview
+        });
       }
 
       if (state.typingPeers.has(data.chatId)) {
@@ -1388,11 +1747,19 @@
       switchAuthTab('register');
     });
 
-    // Drawer & Theme
+    // Drawer & Settings
     els.hamburgerBtn.addEventListener('click', openDrawer);
     els.navDrawerBackdrop.addEventListener('click', closeDrawer);
-    els.drawerThemeBtn.addEventListener('click', toggleTheme);
-    els.menuToggleTheme.addEventListener('click', toggleTheme);
+    els.drawerThemeBtn.addEventListener('click', toggleDarkLightTheme);
+    els.menuToggleTheme.addEventListener('click', toggleDarkLightTheme);
+    els.drawerSettingsBtn.addEventListener('click', () => {
+      closeDrawer();
+      openSettingsModal('general');
+    });
+    els.menuSettings.addEventListener('click', () => {
+      closeDrawer();
+      openSettingsModal('general');
+    });
     els.menuFindUsers.addEventListener('click', () => {
       closeDrawer();
       triggerBrowseUsers();
@@ -1413,6 +1780,105 @@
       els.activeChat.classList.add('hidden');
       els.chatEmptyState.classList.remove('hidden');
       showAuthScreen();
+    });
+
+    // Settings Modal
+    els.settingsModalClose.addEventListener('click', closeSettingsModal);
+    els.settingsModalBackdrop.addEventListener('click', closeSettingsModal);
+    els.settingsBackBtn.addEventListener('click', () => switchSettingsTab('general'));
+    els.settingsNav.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-settings-tab]');
+      if (btn) switchSettingsTab(btn.dataset.settingsTab);
+    });
+    els.settingsOpenProfile.addEventListener('click', () => {
+      closeSettingsModal();
+      openProfileModal();
+    });
+    els.settingsGotoThemes.addEventListener('click', () => switchSettingsTab('themes'));
+
+    els.themeCardsGrid.addEventListener('click', (e) => {
+      const card = e.target.closest('[data-theme-choice]');
+      if (!card) return;
+      state.prefs.theme = card.dataset.themeChoice;
+      savePrefs();
+      applyPrefs();
+    });
+
+    els.accentSwatches.addEventListener('click', (e) => {
+      const dot = e.target.closest('[data-accent]');
+      if (!dot) return;
+      state.prefs.accent = dot.dataset.accent;
+      savePrefs();
+      applyPrefs();
+    });
+
+    els.prefWallpaper.addEventListener('change', () => {
+      state.prefs.wallpaper = els.prefWallpaper.checked;
+      savePrefs();
+      applyPrefs();
+    });
+
+    els.prefCorners.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-corner]');
+      if (!btn) return;
+      state.prefs.corners = btn.dataset.corner;
+      savePrefs();
+      applyPrefs();
+    });
+
+    els.prefFontSize.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-size]');
+      if (!btn) return;
+      state.prefs.fontSize = btn.dataset.size;
+      savePrefs();
+      applyPrefs();
+    });
+
+    els.prefSounds.addEventListener('change', () => {
+      state.prefs.sounds = els.prefSounds.checked;
+      savePrefs();
+      if (state.prefs.sounds) playChime('receive');
+    });
+
+    els.prefAnimations.addEventListener('change', () => {
+      state.prefs.animations = els.prefAnimations.checked;
+      savePrefs();
+      applyPrefs();
+    });
+
+    els.prefEnterSend.addEventListener('change', () => {
+      state.prefs.enterToSend = els.prefEnterSend.checked;
+      savePrefs();
+    });
+
+    els.prefNotifications.addEventListener('change', async () => {
+      const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+      if (els.prefNotifications.checked) {
+        if (hasAndroidBridge) {
+          state.prefs.notifications = true;
+          savePrefs();
+        } else {
+          const granted = await requestBrowserNotificationPermission();
+          if (!granted) els.prefNotifications.checked = false;
+        }
+      } else {
+        state.prefs.notifications = false;
+        savePrefs();
+      }
+      syncSettingsUI();
+    });
+
+    els.notifAllowBtn.addEventListener('click', () => requestBrowserNotificationPermission());
+    els.notifDismissBtn.addEventListener('click', () => {
+      localStorage.setItem('telechat_notif_dismissed', '1');
+      updateNotificationBanner();
+    });
+
+    els.settingsResetBtn.addEventListener('click', () => {
+      state.prefs = { ...DEFAULT_PREFS };
+      savePrefs();
+      applyPrefs();
+      showToast('Appearance reset to defaults', 'success');
     });
 
     // Search & Browse
@@ -1455,6 +1921,87 @@
     els.mobileBackBtn.addEventListener('click', () => {
       els.appShell.classList.remove('mobile-chat-open');
     });
+
+    // In-Chat Search
+    function clearChatSearchHighlights() {
+      els.messagesList.querySelectorAll('.msg-row.search-match').forEach((el) => el.classList.remove('search-match'));
+    }
+
+    function jumpToChatSearchMatch(index) {
+      const matches = state.chatSearch.matches;
+      if (matches.length === 0) {
+        els.chatSearchCount.textContent = '0 / 0';
+        return;
+      }
+      state.chatSearch.index = ((index % matches.length) + matches.length) % matches.length;
+      const msgId = matches[state.chatSearch.index];
+      els.chatSearchCount.textContent = `${state.chatSearch.index + 1} / ${matches.length}`;
+      const el = $(`msg-${msgId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.remove('highlight-pulse');
+        void el.offsetWidth;
+        el.classList.add('highlight-pulse');
+      }
+    }
+
+    function runChatSearch(query) {
+      clearChatSearchHighlights();
+      const q = String(query || '').trim().toLowerCase();
+      state.chatSearch.query = q;
+      if (!q) {
+        state.chatSearch.matches = [];
+        state.chatSearch.index = -1;
+        els.chatSearchCount.textContent = '0 / 0';
+        return;
+      }
+      const matches = [];
+      for (const m of state.messages) {
+        const textHit = (m.text || '').toLowerCase().includes(q);
+        const fileHit = Array.isArray(m.attachments) && m.attachments.some((a) => (a.originalName || '').toLowerCase().includes(q));
+        if (textHit || fileHit) {
+          matches.push(m.id);
+          const el = $(`msg-${m.id}`);
+          if (el) el.classList.add('search-match');
+        }
+      }
+      state.chatSearch.matches = matches;
+      jumpToChatSearchMatch(matches.length - 1);
+    }
+
+    function openChatSearch() {
+      if (!state.activeChatId) return;
+      state.chatSearch.open = true;
+      els.chatSearchBar.classList.remove('hidden');
+      els.chatSearchInput.focus();
+      els.chatSearchInput.select();
+    }
+
+    function closeChatSearch() {
+      state.chatSearch.open = false;
+      state.chatSearch.query = '';
+      state.chatSearch.matches = [];
+      state.chatSearch.index = -1;
+      els.chatSearchInput.value = '';
+      els.chatSearchCount.textContent = '0 / 0';
+      els.chatSearchBar.classList.add('hidden');
+      clearChatSearchHighlights();
+    }
+
+    els.toggleChatSearchBtn.addEventListener('click', () => {
+      if (state.chatSearch.open) closeChatSearch();
+      else openChatSearch();
+    });
+    els.chatSearchClose.addEventListener('click', closeChatSearch);
+    els.chatSearchInput.addEventListener('input', () => runChatSearch(els.chatSearchInput.value));
+    els.chatSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        jumpToChatSearchMatch(state.chatSearch.index + (e.shiftKey ? -1 : 1));
+      }
+    });
+    els.chatSearchPrev.addEventListener('click', () => jumpToChatSearchMatch(state.chatSearch.index - 1));
+    els.chatSearchNext.addEventListener('click', () => jumpToChatSearchMatch(state.chatSearch.index + 1));
 
     // Info Drawer
     els.toggleInfoBtn.addEventListener('click', () => toggleInfoDrawer());
@@ -1500,10 +2047,25 @@
         return;
       }
 
+      const copyBtn = e.target.closest('[data-copy-msg]');
+      if (copyBtn) {
+        const target = state.messages.find((m) => m.id === copyBtn.dataset.copyMsg);
+        if (target && target.text && navigator.clipboard) {
+          await navigator.clipboard.writeText(target.text).catch(() => { });
+          showToast('Message copied to clipboard', 'success');
+        }
+        return;
+      }
+
       const jumpReply = e.target.closest('[data-scroll-msg]');
       if (jumpReply) {
         const targetEl = $(`msg-${jumpReply.dataset.scrollMsg}`);
-        if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (targetEl) {
+          targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          targetEl.classList.remove('highlight-pulse');
+          void targetEl.offsetWidth;
+          targetEl.classList.add('highlight-pulse');
+        }
         return;
       }
 
@@ -1556,7 +2118,11 @@
     });
 
     els.messageInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      const sendOnEnter = state.prefs.enterToSend !== false;
+      if (sendOnEnter && e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      } else if (!sendOnEnter && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         sendMessage();
       }
@@ -1674,12 +2240,25 @@
       }
     });
 
-    // Global Esc handling
+    // Global Keyboard Shortcuts
     document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && state.me) {
+        e.preventDefault();
+        els.sidebarSearch.focus();
+        els.sidebarSearch.select();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f' && state.me && state.activeChatId) {
+        e.preventDefault();
+        openChatSearch();
+        return;
+      }
       if (e.key === 'Escape') {
         closeLightbox();
         closeProfileModal();
+        closeSettingsModal();
         closeDrawer();
+        closeChatSearch();
         els.emojiPopover.classList.add('hidden');
       }
     });
@@ -1688,12 +2267,74 @@
   async function onAuthenticated(user) {
     state.me = user;
     showAppShell();
+    updateNotificationBanner();
     connectRealtime();
     await refreshChats();
   }
 
+  function setupMobileViewportSync() {
+    const root = document.documentElement;
+    const syncViewport = () => {
+      const vv = window.visualViewport;
+      const height = vv ? vv.height : (window.innerHeight || 0);
+      const offsetTop = vv ? vv.offsetTop : 0;
+      if (height) {
+        root.style.setProperty('--app-height', `${Math.round(height)}px`);
+      }
+      root.style.setProperty('--app-offset-top', `${Math.round(offsetTop)}px`);
+      if ((window.scrollY || window.scrollX) && typeof window.scrollTo === 'function') {
+        window.scrollTo(0, 0);
+      }
+    };
+
+    syncViewport();
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('resize', syncViewport);
+    }
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        const wasBottom = isNearBottom();
+        syncViewport();
+        if (wasBottom && state.activeChatId) {
+          requestAnimationFrame(() => {
+            els.messagesViewport.scrollTop = els.messagesViewport.scrollHeight;
+          });
+        }
+      });
+      window.visualViewport.addEventListener('scroll', syncViewport);
+    }
+
+    els.messageInput.addEventListener('focus', () => {
+      const wasBottom = isNearBottom();
+      setTimeout(() => {
+        syncViewport();
+        if (wasBottom) {
+          els.messagesViewport.scrollTop = els.messagesViewport.scrollHeight;
+        }
+      }, 120);
+      setTimeout(syncViewport, 320);
+    });
+  }
+
+  // Expose clean hooks for the Android WebView wrapper
+  window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
+  window.__telechatHandleBack = () => {
+    if (!els.lightboxModal.classList.contains('hidden')) { closeLightbox(); return true; }
+    if (!els.settingsModal.classList.contains('hidden')) { closeSettingsModal(); return true; }
+    if (!els.profileModal.classList.contains('hidden')) { closeProfileModal(); return true; }
+    if (els.navDrawer.classList.contains('open')) { closeDrawer(); return true; }
+    if (state.infoOpen) { toggleInfoDrawer(false); return true; }
+    if (els.appShell.classList.contains('mobile-chat-open')) {
+      els.appShell.classList.remove('mobile-chat-open');
+      return true;
+    }
+    return false;
+  };
+
   async function boot() {
-    applyTheme(state.theme);
+    applyPrefs();
+    setupMobileViewportSync();
+    registerServiceWorker();
     initEmojiPopover();
     wireEvents();
 

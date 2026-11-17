@@ -3,10 +3,14 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
   <title>TeleChat — Smooth Telegram-Style Messaging</title>
+  <meta name="theme-color" content="#17212B" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/styles.css?v=2" />
 </head>
 
 <body>
@@ -138,10 +142,21 @@
       <div class="drawer-header">
         <div class="drawer-user-top">
           <div id="drawer-avatar" class="avatar avatar-lg"></div>
-          <button id="drawer-theme-btn" class="icon-btn" type="button" title="Toggle Dark/Light Theme"
-            aria-label="Toggle theme">
-            <span id="theme-icon">☀️</span>
-          </button>
+          <div class="drawer-top-actions">
+            <button id="drawer-theme-btn" class="icon-btn" type="button" title="Toggle Dark/Light Theme"
+              aria-label="Toggle theme">
+              <span id="theme-icon">☀️</span>
+            </button>
+            <button id="drawer-settings-btn" class="icon-btn" type="button" title="Settings"
+              aria-label="Open settings">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path
+                  d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="drawer-user-info">
           <div id="drawer-displayname" class="drawer-name"></div>
@@ -158,8 +173,12 @@
           <span class="drawer-item-icon">✏️</span>
           <span>Edit Profile &amp; Avatar</span>
         </button>
+        <button id="menu-settings" class="drawer-item" type="button">
+          <span class="drawer-item-icon">⚙️</span>
+          <span>Settings</span>
+        </button>
         <button id="menu-toggle-theme" class="drawer-item" type="button">
-          <span class="drawer-item-icon">🎨</span>
+          <span class="drawer-item-icon">🌓</span>
           <span id="menu-theme-label">Switch to Light Mode</span>
         </button>
         <div class="drawer-divider"></div>
@@ -205,6 +224,17 @@
         </button>
       </header>
 
+      <div id="notif-banner" class="notif-banner hidden">
+        <div class="notif-banner-text">
+          <strong>Enable Notifications</strong>
+          <span>Get alerts when new messages arrive</span>
+        </div>
+        <div class="notif-banner-actions">
+          <button id="notif-allow-btn" class="notif-allow-btn" type="button">Enable</button>
+          <button id="notif-dismiss-btn" class="icon-btn-sm" type="button" aria-label="Dismiss">✕</button>
+        </div>
+      </div>
+
       <div id="sidebar-section-title" class="sidebar-section-title hidden"></div>
       <div id="sidebar-list" class="sidebar-list" role="list"></div>
     </aside>
@@ -238,6 +268,14 @@
             </div>
           </div>
           <div class="chat-header-actions">
+            <button id="toggle-chat-search-btn" class="icon-btn" type="button" title="Search in chat"
+              aria-label="Search in chat">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </button>
             <button id="toggle-info-btn" class="icon-btn" type="button" title="Chat Info &amp; Shared Media"
               aria-label="Chat info">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
@@ -249,9 +287,25 @@
           </div>
         </header>
 
+        <!-- In-Chat Message Search Bar -->
+        <div id="chat-search-bar" class="chat-search-bar hidden">
+          <input id="chat-search-input" type="search" placeholder="Search messages in this chat..." autocomplete="off" />
+          <span id="chat-search-count" class="chat-search-count">0 / 0</span>
+          <button id="chat-search-prev" class="icon-btn-sm" type="button" title="Previous match" aria-label="Previous match">↑</button>
+          <button id="chat-search-next" class="icon-btn-sm" type="button" title="Next match" aria-label="Next match">↓</button>
+          <button id="chat-search-close" class="icon-btn-sm" type="button" title="Close search" aria-label="Close search">✕</button>
+        </div>
+
         <!-- Messages Container -->
         <div id="messages-viewport" class="messages-viewport">
           <div id="messages-list" class="messages-list"></div>
+          <div id="typing-bubble-row" class="msg-row incoming typing-row hidden" aria-hidden="true">
+            <div class="msg-bubble typing-bubble">
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+              <span class="typing-dot"></span>
+            </div>
+          </div>
           <button id="scroll-bottom-btn" class="scroll-bottom-btn hidden" type="button" aria-label="Scroll to bottom">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2"
               stroke-linecap="round" stroke-linejoin="round">
@@ -405,10 +459,200 @@
     </div>
   </div>
 
+  <!-- Settings Modal (Account, Themes, Sounds & Behavior) -->
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+    <div class="modal-backdrop" id="settings-modal-backdrop"></div>
+    <div class="modal-card modal-card-wide settings-card">
+      <div class="modal-header">
+        <div class="settings-header-left">
+          <button id="settings-back-btn" class="icon-btn-sm hidden" type="button" aria-label="Back to settings menu">←</button>
+          <h3 id="settings-modal-title">Settings</h3>
+        </div>
+        <button id="settings-modal-close" class="icon-btn" type="button" aria-label="Close settings">✕</button>
+      </div>
+
+      <div class="settings-layout">
+        <!-- Settings Navigation Menu -->
+        <aside id="settings-nav" class="settings-nav" role="tablist">
+          <button class="settings-nav-item active" type="button" data-settings-tab="general">
+            <span class="settings-nav-icon">👤</span>
+            <span class="settings-nav-text">
+              <strong>Account &amp; General</strong>
+              <small>Profile, email status &amp; shortcuts</small>
+            </span>
+            <span class="settings-nav-arrow">›</span>
+          </button>
+          <button class="settings-nav-item" type="button" data-settings-tab="themes">
+            <span class="settings-nav-icon">🎨</span>
+            <span class="settings-nav-text">
+              <strong>Themes</strong>
+              <small>Color themes, accents &amp; bubbles</small>
+            </span>
+            <span class="settings-nav-arrow">›</span>
+          </button>
+          <button class="settings-nav-item" type="button" data-settings-tab="chat">
+            <span class="settings-nav-icon">🔔</span>
+            <span class="settings-nav-text">
+              <strong>Sounds &amp; Behavior</strong>
+              <small>Sounds, animations &amp; Enter key</small>
+            </span>
+            <span class="settings-nav-arrow">›</span>
+          </button>
+        </aside>
+
+        <!-- Settings Content Panels -->
+        <div class="settings-content">
+          <!-- General / Account Panel -->
+          <section id="settings-panel-general" class="settings-panel">
+            <div class="settings-account-card">
+              <div id="settings-avatar" class="avatar avatar-lg"></div>
+              <div class="settings-account-meta">
+                <div id="settings-displayname" class="settings-account-name"></div>
+                <div id="settings-username" class="settings-account-sub"></div>
+                <div class="settings-verified-row">
+                  <span id="settings-email" class="settings-account-email"></span>
+                  <span class="verified-pill">✓ Verified</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-action-list">
+              <button id="settings-open-profile" class="settings-action-row" type="button">
+                <span>✏️ Edit Display Name, Bio &amp; Avatar</span>
+                <span>›</span>
+              </button>
+              <button id="settings-goto-themes" class="settings-action-row" type="button">
+                <span>🎨 Customize Theme &amp; Colors</span>
+                <span>›</span>
+              </button>
+            </div>
+
+            <div class="settings-section-label">Keyboard Shortcuts</div>
+            <div class="shortcuts-box">
+              <div class="shortcut-row"><span>Search users</span><kbd>Ctrl</kbd> + <kbd>K</kbd></div>
+              <div class="shortcut-row"><span>Search in chat</span><kbd>Ctrl</kbd> + <kbd>F</kbd></div>
+              <div class="shortcut-row"><span>New line in message</span><kbd>Shift</kbd> + <kbd>Enter</kbd></div>
+              <div class="shortcut-row"><span>Close popup / cancel</span><kbd>Esc</kbd></div>
+            </div>
+          </section>
+
+          <!-- Themes Panel -->
+          <section id="settings-panel-themes" class="settings-panel hidden">
+            <div class="settings-section-label">Live Preview</div>
+            <div class="theme-live-preview">
+              <div class="preview-bubble in">
+                <span>Hey! How does the new theme look? ✨</span>
+                <small>10:24 AM</small>
+              </div>
+              <div class="preview-bubble out">
+                <span>Super clean and smooth! 💙</span>
+                <small>10:25 AM ✓✓</small>
+              </div>
+            </div>
+
+            <div class="settings-section-label">Color Theme</div>
+            <div id="theme-cards-grid" class="theme-cards-grid">
+              <button type="button" class="theme-card" data-theme-choice="dark">
+                <span class="theme-swatch swatch-dark"><span></span><span></span></span>
+                <span class="theme-card-name">Telegram Night</span>
+              </button>
+              <button type="button" class="theme-card" data-theme-choice="light">
+                <span class="theme-swatch swatch-light"><span></span><span></span></span>
+                <span class="theme-card-name">Daylight</span>
+              </button>
+              <button type="button" class="theme-card" data-theme-choice="amoled">
+                <span class="theme-swatch swatch-amoled"><span></span><span></span></span>
+                <span class="theme-card-name">Midnight AMOLED</span>
+              </button>
+              <button type="button" class="theme-card" data-theme-choice="ocean">
+                <span class="theme-swatch swatch-ocean"><span></span><span></span></span>
+                <span class="theme-card-name">Oceanic Teal</span>
+              </button>
+              <button type="button" class="theme-card" data-theme-choice="sunset">
+                <span class="theme-swatch swatch-sunset"><span></span><span></span></span>
+                <span class="theme-card-name">Sunset Plum</span>
+              </button>
+            </div>
+
+            <div class="settings-section-label">Accent Color</div>
+            <div id="accent-swatches" class="accent-swatches">
+              <button type="button" class="accent-dot" data-accent="blue" style="--dot:#5288C1" title="Telegram Blue"></button>
+              <button type="button" class="accent-dot" data-accent="cyan" style="--dot:#2EA6DE" title="Sky Cyan"></button>
+              <button type="button" class="accent-dot" data-accent="emerald" style="--dot:#3BB273" title="Emerald"></button>
+              <button type="button" class="accent-dot" data-accent="violet" style="--dot:#8B6CE8" title="Violet"></button>
+              <button type="button" class="accent-dot" data-accent="rose" style="--dot:#E16B8C" title="Rose"></button>
+              <button type="button" class="accent-dot" data-accent="amber" style="--dot:#E5A04C" title="Amber"></button>
+            </div>
+
+            <div class="settings-section-label">Chat Appearance</div>
+            <div class="settings-control-group">
+              <label class="toggle-row">
+                <span>Chat doodle wallpaper pattern</span>
+                <input id="pref-wallpaper" type="checkbox" class="tg-switch" checked />
+              </label>
+
+              <div class="segmented-row">
+                <span>Bubble Corners</span>
+                <div class="segmented-control" id="pref-corners">
+                  <button type="button" data-corner="classic" class="active">Classic</button>
+                  <button type="button" data-corner="round">Round</button>
+                  <button type="button" data-corner="sharp">Minimal</button>
+                </div>
+              </div>
+
+              <div class="segmented-row">
+                <span>Text Size</span>
+                <div class="segmented-control" id="pref-fontsize">
+                  <button type="button" data-size="sm">Compact</button>
+                  <button type="button" data-size="md" class="active">Normal</button>
+                  <button type="button" data-size="lg">Large</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Sounds & Behavior Panel -->
+          <section id="settings-panel-chat" class="settings-panel hidden">
+            <div class="settings-section-label">Notifications</div>
+            <div class="settings-control-group">
+              <label class="toggle-row">
+                <span>
+                  Browser / Device notifications
+                  <small id="notif-status-hint" class="setting-sub-hint"></small>
+                </span>
+                <input id="pref-notifications" type="checkbox" class="tg-switch" checked />
+              </label>
+            </div>
+
+            <div class="settings-section-label">Audio &amp; Motion</div>
+            <div class="settings-control-group">
+              <label class="toggle-row">
+                <span>Message sound effects</span>
+                <input id="pref-sounds" type="checkbox" class="tg-switch" checked />
+              </label>
+              <label class="toggle-row">
+                <span>Smooth animations &amp; transitions</span>
+                <input id="pref-animations" type="checkbox" class="tg-switch" checked />
+              </label>
+              <label class="toggle-row">
+                <span>Press Enter to send message</span>
+                <input id="pref-enter-send" type="checkbox" class="tg-switch" checked />
+              </label>
+            </div>
+
+            <div class="settings-reset-wrap">
+              <button id="settings-reset-btn" class="secondary-btn" type="button">Reset Appearance to Defaults</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-  <script src="/app.js"></script>
+  <script src="/app.js?v=2"></script>
 </body>
 
 </html>

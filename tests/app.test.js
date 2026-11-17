@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const vm = require('node:vm');
 const { PassThrough, Writable } = require('node:stream');
 const { createConfig } = require('../src/config');
 const { createAuthHelpers } = require('../src/auth');
@@ -182,14 +183,14 @@ test('email verification lifecycle handles 5m expiry, progressive 2m->4m->6m res
 
 test('progressive resend cooldown scales linearly and allows resending after code expiry', async (t) => {
   const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telechat-progressive-test-'));
-  // Scaled timings: 40ms code expiry, 25ms initial resend + 25ms increment (25ms -> 50ms -> 75ms)
+  // Scaled timings: 100ms code expiry, 150ms initial resend + 150ms increment (150ms -> 300ms -> 450ms)
   const config = createConfig({
     dataDir: tempDataDir,
     skipDotEnv: true,
     smtp: null,
-    verificationTtlMs: 40,
-    verificationResendCooldownMs: 25,
-    verificationResendStepMs: 25,
+    verificationTtlMs: 100,
+    verificationResendCooldownMs: 150,
+    verificationResendStepMs: 150,
     verificationSessionTtlMs: 10000
   });
   const auth = createAuthHelpers(config);
@@ -217,8 +218,8 @@ test('progressive resend cooldown scales linearly and allows resending after cod
   assert.equal(reg.status, 202);
   const firstCode = reg.body.devCode;
 
-  // Wait >40ms so first code expires AND initial 25ms cooldown elapses
-  await sleep(55);
+  // Wait >150ms so first code expires AND initial 150ms cooldown elapses
+  await sleep(170);
   const expiredVerify = await req('/api/auth/verify-email', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -227,7 +228,7 @@ test('progressive resend cooldown scales linearly and allows resending after cod
   assert.equal(expiredVerify.status, 400);
   assert.match(expiredVerify.body.error, /expired/i);
 
-  // 1st resend succeeds and doubles cooldown step (next cooldown = 25 + 1*25 = 50ms)
+  // 1st resend succeeds and doubles cooldown step (next cooldown = 150 + 1*150 = 300ms)
   const resend1 = await req('/api/auth/resend-verification', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -236,8 +237,8 @@ test('progressive resend cooldown scales linearly and allows resending after cod
   assert.equal(resend1.status, 200);
   assert.equal(resend1.body.resendCount, 1);
 
-  // After 30ms (< 50ms), 2nd resend must still be blocked
-  await sleep(30);
+  // After 100ms (< 300ms), 2nd resend must still be blocked
+  await sleep(100);
   const tooEarly = await req('/api/auth/resend-verification', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -245,8 +246,8 @@ test('progressive resend cooldown scales linearly and allows resending after cod
   });
   assert.equal(tooEarly.status, 429);
 
-  // Wait remaining cooldown and do 2nd resend (next cooldown = 25 + 2*25 = 75ms)
-  await sleep(35);
+  // Wait remaining cooldown and do 2nd resend (next cooldown = 150 + 2*150 = 450ms)
+  await sleep(240);
   const resend2 = await req('/api/auth/resend-verification', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -432,7 +433,16 @@ test('full user registration, folder storage, search, chat logs, and image/file 
 
   const homeRes = await req('/');
   assert.equal(homeRes.status, 200);
-  assert.match(homeRes.body.toString('utf8'), /<title>TeleChat/);
+  const homeHtml = homeRes.body.toString('utf8');
+  assert.match(homeHtml, /<title>TeleChat/);
+  assert.match(homeHtml, /\/styles\.css\?v=[a-f0-9]{8}/);
+  assert.match(homeHtml, /\/app\.js\?v=[a-f0-9]{8}/);
+  assert.equal(homeRes.headers['cache-control'], 'no-store');
+
+  const manifestRes = await req('/manifest.webmanifest');
+  assert.equal(manifestRes.status, 200);
+  const manifestJson = JSON.parse(manifestRes.body.toString('utf8'));
+  assert.equal(manifestJson.name, 'TeleChat');
 
   // Non-participant should be denied access to files
   const carolReg = await registerAndVerify({
@@ -496,4 +506,86 @@ test('full user registration, folder storage, search, chat logs, and image/file 
     headers: { Cookie: aliceReg.cookie }
   });
   assert.equal(delRes.status, 200);
+});
+
+test('frontend app.js boots cleanly and matches all HTML element IDs', async () => {
+  const rootDir = path.resolve(__dirname, '..');
+  const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+  const js = fs.readFileSync(path.join(rootDir, 'public', 'app.js'), 'utf8');
+
+  const combined = `${html}\n${js}`;
+  const missingIds = [];
+  for (const m of js.matchAll(/\$\('([^']+)'\)/g)) {
+    if (!combined.includes(`id="${m[1]}"`)) {
+      missingIds.push(m[1]);
+    }
+  }
+  assert.deepEqual(missingIds, []);
+
+  let authScreenShown = false;
+  const elements = new Map();
+  function makeEl(id) {
+    const el = {
+      id,
+      classList: {
+        _set: new Set(['hidden']),
+        add(c) { this._set.add(c); },
+        remove(c) {
+          this._set.delete(c);
+          if (id === 'auth-screen' && c === 'hidden') authScreenShown = true;
+        },
+        toggle(c, force) {
+          if (force === undefined) {
+            if (this._set.has(c)) this._set.delete(c);
+            else this._set.add(c);
+          } else if (force) {
+            this._set.add(c);
+          } else {
+            this._set.delete(c);
+          }
+        },
+        contains(c) { return this._set.has(c); }
+      },
+      addEventListener() {},
+      setAttribute() {},
+      querySelectorAll() { return []; },
+      style: { setProperty() {} },
+      value: '',
+      innerHTML: '',
+      textContent: '',
+      checked: false
+    };
+    return el;
+  }
+
+  const sandbox = {
+    localStorage: { getItem() { return null; }, setItem() {} },
+    document: {
+      documentElement: makeEl('html'),
+      getElementById(id) {
+        if (!elements.has(id)) elements.set(id, makeEl(id));
+        return elements.get(id);
+      },
+      querySelectorAll() { return []; },
+      addEventListener() {}
+    },
+    window: {
+      innerHeight: 800,
+      scrollX: 0,
+      scrollY: 0,
+      addEventListener() {},
+      scrollTo() {}
+    },
+    fetch: async () => ({ ok: false, status: 401, json: async () => ({}) }),
+    console,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    URL
+  };
+
+  vm.runInNewContext(js, sandbox);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(authScreenShown, true);
 });

@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { parseMultipart, readBodyBuffer } = require('./multipart');
 const { createMailer } = require('./mailer');
 
@@ -18,6 +19,7 @@ const MIME_TYPES = {
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
   '.pdf': 'application/pdf',
   '.mp3': 'audio/mpeg',
@@ -77,7 +79,20 @@ function createRouter({ config, auth, storage, hub, mailer }) {
     return { ...user, online: hub.isOnline(user.username) };
   }
 
-  async function serveStatic(reqPath, res) {
+  async function getAssetVersion(publicRoot, filename) {
+    try {
+      const stat = await fsp.stat(path.join(publicRoot, filename));
+      return crypto
+        .createHash('sha1')
+        .update(`${stat.mtimeMs}:${stat.size}`)
+        .digest('hex')
+        .slice(0, 8);
+    } catch {
+      return '1';
+    }
+  }
+
+  async function serveStatic(reqPath, urlObj, res) {
     const cleanPath = reqPath === '/' ? '/index.html' : reqPath;
     const publicRoot = path.resolve(config.publicDir);
     const targetPath = path.resolve(publicRoot, '.' + cleanPath);
@@ -92,10 +107,31 @@ function createRouter({ config, auth, storage, hub, mailer }) {
       if (!stat.isFile()) return false;
       const ext = path.extname(targetPath).toLowerCase();
       const mime = MIME_TYPES[ext] || 'application/octet-stream';
+
+      if (cleanPath === '/index.html') {
+        const [cssVer, jsVer, rawHtml] = await Promise.all([
+          getAssetVersion(publicRoot, 'styles.css'),
+          getAssetVersion(publicRoot, 'app.js'),
+          fsp.readFile(targetPath, 'utf8')
+        ]);
+        const versionedHtml = rawHtml
+          .replace(/\/styles\.css(?:\?v=[^"']*)?/g, `/styles.css?v=${cssVer}`)
+          .replace(/\/app\.js(?:\?v=[^"']*)?/g, `/app.js?v=${jsVer}`);
+        const buf = Buffer.from(versionedHtml, 'utf8');
+        res.writeHead(200, {
+          'Content-Type': mime,
+          'Content-Length': buf.length,
+          'Cache-Control': 'no-store'
+        });
+        res.end(buf);
+        return true;
+      }
+
+      const hasVersion = urlObj.searchParams.has('v');
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Length': stat.size,
-        'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600'
+        'Cache-Control': hasVersion ? 'public, max-age=31536000, immutable' : 'no-cache'
       });
       fs.createReadStream(targetPath).pipe(res);
       return true;
@@ -524,7 +560,7 @@ function createRouter({ config, auth, storage, hub, mailer }) {
 
       // Serve frontend static assets
       if (method === 'GET') {
-        const served = await serveStatic(pathname, res);
+        const served = await serveStatic(pathname, urlObj, res);
         if (served) return;
       }
 
