@@ -58,13 +58,13 @@ jobs:
           VER=$(grep -E 'versionName\s+"' android/app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
           TAG="v${VER}"
           STD_APK="android/app/build/outputs/apk/standard/release/VibeRoom-${TAG}.apk"
-          LEG_APK="android/app/build/outputs/apk/legacy/release/VibeRoom-Legacy-${TAG}.apk"
+          LEG_APK="android/app/build/outputs/apk/legacy/release/VibeRoomCompat-${TAG}.apk"
           cp android/app/build/outputs/apk/standard/release/app-standard-release.apk "$STD_APK"
           cp android/app/build/outputs/apk/legacy/release/app-legacy-release.apk "$LEG_APK"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$STD_APK" "$LEG_APK" --clobber
           else
-            gh release create "$TAG" "$STD_APK" "$LEG_APK" --title "VibeRoom ${TAG}" --notes "VibeRoom Android ${TAG} (includes VibeRoom-v${VER}.apk for Android 7+ and VibeRoom-Legacy-v${VER}.apk for Android 5.0–10 / older devices)" --latest
+            gh release create "$TAG" "$STD_APK" "$LEG_APK" --title "VibeRoom ${TAG}" --notes "VibeRoom Android ${TAG} (includes VibeRoom-${TAG}.apk for Android 7+ and VibeRoomCompat-${TAG}.apk for Android 5.0–10 / older devices)" --latest
           fi
 
       - name: Upload VibeRoom Standard APK Artifact

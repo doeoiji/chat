@@ -15,8 +15,8 @@ android {
         applicationId "fun.bitdev.telechat"
         minSdk 24
         targetSdk 35
-        versionCode 9
-        versionName "1.0.8"
+        versionCode 10
+        versionName "1.0.9"
     }
 
     flavorDimensions "compat"
@@ -35,7 +35,7 @@ android {
             minSdk 21
             targetSdk 29
             resValue "string", "app_name", "VibeRoom Legacy"
-            resValue "string", "apk_asset_prefix", "VibeRoom-Legacy-v"
+            resValue "string", "apk_asset_prefix", "VibeRoomCompat-v"
         }
     }
 

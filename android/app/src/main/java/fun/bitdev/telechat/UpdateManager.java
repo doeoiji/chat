@@ -516,9 +516,9 @@ public class UpdateManager {
         if (!lowerName.endsWith(".apk")) return false;
         String lowerPrefix = expectedPrefix.toLowerCase();
         if (lowerName.startsWith(lowerPrefix)) return true;
-        // Legacy flavor must only install legacy APK; standard flavor skips legacy APKs
-        if (lowerPrefix.contains("legacy")) {
-            return lowerName.contains("legacy");
+        // Legacy/Compat flavor must only install compat/legacy APKs; standard flavor skips them
+        if (lowerPrefix.contains("compat") || lowerPrefix.contains("legacy")) {
+            return lowerName.contains("compat") || lowerName.contains("legacy");
         }
         return !lowerName.contains("legacy") && !lowerName.contains("compat");
     }
