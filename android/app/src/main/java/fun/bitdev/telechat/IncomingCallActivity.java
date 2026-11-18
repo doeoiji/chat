@@ -23,18 +23,15 @@ public class IncomingCallActivity extends Activity {
     private static volatile IncomingCallActivity activeInstance = null;
     private static volatile String activeCallId = "";
 
-    private final Handler timeoutHandler = new Handler(Looper.getMainLooper());
-    private final Runnable autoFinishTask = () -> {
-        MessageService.cancelIncomingCallNotification(this, callId);
-        finish();
-    };
-
     private String callId = "";
     private String chatId = "";
     private String callMode = "audio";
     private String callerName = "Incoming Call";
     private String avatarUrl = "";
     private String avatarColor = "";
+
+    private final Handler timeoutHandler = new Handler(Looper.getMainLooper());
+    private final Runnable autoFinishTask = this::onAutoTimeout;
 
     public static void dismissIfMatches(String targetCallId) {
         IncomingCallActivity inst = activeInstance;
@@ -238,6 +235,11 @@ public class IncomingCallActivity extends Activity {
         lblLp.topMargin = dp(10);
         col.addView(lbl, lblLp);
         return col;
+    }
+
+    private void onAutoTimeout() {
+        MessageService.cancelIncomingCallNotification(this, callId);
+        finish();
     }
 
     private void onDeclinePressed() {
