@@ -55,6 +55,14 @@
             android:exported="false" />
 
         <service
+            android:name=".ViberoomFcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".MessagePollJobService"
             android:enabled="true"
             android:exported="false"

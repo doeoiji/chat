@@ -5,6 +5,11 @@ node_modules/
 .env
 .env.local
 
+# Firebase credentials (never commit secrets)
+firebase-service-account.json
+*-firebase-adminsdk-*.json
+android/app/google-services.json
+
 # Runtime user & chat data (keep folder structure via .gitkeep)
 data/*
 !data/users/

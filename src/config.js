@@ -65,6 +65,16 @@ function createConfig(overrides = {}) {
     verificationResendStepMs: Number(overrides.verificationResendStepMs ?? 2 * 60 * 1000), // +2 minutes per resend
     verificationSessionTtlMs: Number(overrides.verificationSessionTtlMs ?? 60 * 60 * 1000), // 60 minutes session lifetime
     allowDevEmailCode: overrides.allowDevEmailCode ?? (process.env.ALLOW_DEV_EMAIL_CODE !== 'false'),
+    push: {
+      vapidPublicKey: overrides.vapidPublicKey ?? process.env.VAPID_PUBLIC_KEY ?? '',
+      vapidPrivateKey: overrides.vapidPrivateKey ?? process.env.VAPID_PRIVATE_KEY ?? '',
+      vapidSubject: overrides.vapidSubject ?? process.env.VAPID_SUBJECT ?? 'mailto:admin@viberoom.app',
+      fcmServiceAccountJson: overrides.fcmServiceAccountJson ?? process.env.FCM_SERVICE_ACCOUNT_JSON ?? '',
+      fcmProjectId: overrides.fcmProjectId ?? process.env.FCM_PROJECT_ID ?? '',
+      fcmClientEmail: overrides.fcmClientEmail ?? process.env.FCM_CLIENT_EMAIL ?? '',
+      fcmPrivateKey: overrides.fcmPrivateKey ?? process.env.FCM_PRIVATE_KEY ?? '',
+      fcmServerKey: overrides.fcmServerKey ?? process.env.FCM_SERVER_KEY ?? ''
+    },
     smtp: overrides.smtp === null
       ? null
       : (smtpHost && smtpUser && smtpPass

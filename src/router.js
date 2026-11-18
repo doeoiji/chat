@@ -11,6 +11,8 @@ const { createGroupService } = require('./groups');
 const { createStrangerService } = require('./stranger');
 const { createGamesService } = require('./games');
 const { createCallsService } = require('./calls');
+const { createPollsService } = require('./polls');
+const { createPushService } = require('./push');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -66,15 +68,36 @@ async function readJsonBody(req, maxBytes = 1024 * 1024) {
   }
 }
 
-function createRouter({ config, auth, storage, hub, mailer, audit }) {
+function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
   const mailService = mailer || createMailer(config);
   const auditLogger = audit || createAuditLogger(config);
+  const pushService = push || createPushService({ config, storage });
   const linkPreview = createLinkPreviewService();
   const friends = createFriendsService({ config, storage });
   const groups = createGroupService({ config, storage, friends });
   const stranger = createStrangerService({ hub, storage, friends });
   const games = createGamesService({ storage, friends });
+  const polls = createPollsService({ storage });
   const calls = createCallsService({ hub, storage, audit: auditLogger });
+
+  function emitSanitizedMessageEvent(participants, eventName, chatId, rawMessage, extra = {}) {
+    if (!Array.isArray(participants) || !rawMessage) return;
+    for (const participant of participants) {
+      hub.emitToUser(participant, eventName, {
+        ...extra,
+        chatId,
+        message: storage.sanitizeMessageForViewer(rawMessage, participant)
+      });
+    }
+  }
+
+  function dispatchChatPushNotifications(meta, senderUser, message) {
+    if (!meta || !Array.isArray(meta.participants) || !message) return;
+    const recipients = meta.participants.filter((u) => u && u !== senderUser.username);
+    if (recipients.length === 0) return;
+    const payload = pushService.formatMessagePreview(message, senderUser, meta);
+    pushService.notifyUsers(recipients, payload, { chatId: meta.id }).catch(() => {});
+  }
   async function requireAuth(req, res, { logUnauthorized = true } = {}) {
     const session = auth.getSessionUser(req);
     if (!session) {
@@ -195,7 +218,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
   }
 
   function scheduleLinkPreview(chatId, message) {
-    if (!message || !message.text) return;
+    if (!message || !message.text || message.viewOnce || message.kind === 'poll') return;
     const url = linkPreview.extractFirstUrl(message.text);
     if (!url) return;
     linkPreview.fetchPreview(url).then(async (preview) => {
@@ -1000,6 +1023,9 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         let replyToId = null;
         let kind = 'text';
         let sticker = null;
+        let voiceMeta = null;
+        let ttlSeconds = 0;
+        let viewOnce = false;
         let files = [];
 
         const contentType = req.headers['content-type'] || '';
@@ -1014,6 +1040,13 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           if (parsed.fields.sticker) {
             try { sticker = JSON.parse(parsed.fields.sticker); } catch { }
           }
+          if (parsed.fields.voiceMeta) {
+            try { voiceMeta = JSON.parse(parsed.fields.voiceMeta); } catch { }
+          }
+          if (parsed.fields.ttlSeconds) {
+            ttlSeconds = Number(parsed.fields.ttlSeconds) || 0;
+          }
+          viewOnce = parsed.fields.viewOnce === '1' || parsed.fields.viewOnce === 'true';
           files = parsed.files;
         } else {
           const body = await readJsonBody(req);
@@ -1025,6 +1058,13 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           if (body.sticker && typeof body.sticker === 'object') {
             sticker = body.sticker;
           }
+          if (body.voiceMeta && typeof body.voiceMeta === 'object') {
+            voiceMeta = body.voiceMeta;
+          }
+          if (body.ttlSeconds) {
+            ttlSeconds = Number(body.ttlSeconds) || 0;
+          }
+          viewOnce = Boolean(body.viewOnce);
         }
 
         if (groups.isGroupOrChannelId(chatId)) {
@@ -1062,7 +1102,10 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           files,
           replyToId,
           kind,
-          sticker
+          sticker,
+          voiceMeta,
+          ttlSeconds,
+          viewOnce
         });
 
         await storage.updateLastSeen(me.username);
@@ -1074,20 +1117,24 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           details: {
             chatId,
             messageId: message.id,
-            text: message.text ? message.text.slice(0, 160) : '',
+            text: message.viewOnce ? '[view-once]' : (message.text ? message.text.slice(0, 160) : ''),
             files: (message.attachments || []).map((a) => `${a.originalName}(${a.size}B)`).join(','),
-            mentions: (message.mentions || []).join(',')
+            mentions: (message.mentions || []).join(','),
+            ttlSeconds: message.ttlSeconds || 0,
+            viewOnce: Boolean(message.viewOnce)
           }
         });
-        hub.emitToUsers(meta.participants, 'new_message', {
-          chatId,
-          message,
+        emitSanitizedMessageEvent(meta.participants, 'new_message', chatId, message, {
           meta,
           senderProfile: enrichUser(me)
         });
         scheduleLinkPreview(chatId, message);
+        dispatchChatPushNotifications(meta, me, message);
 
-        return sendJson(res, 201, { message, meta });
+        return sendJson(res, 201, {
+          message: storage.sanitizeMessageForViewer(message, me.username),
+          meta
+        });
       }
 
       // Mark chat as read
@@ -1458,13 +1505,204 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         return sendJson(res, 200, prefsOut);
       }
 
+      // View-Once open & burn endpoints
+      const viewOnceOpenMatch = /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/view-once$/.exec(pathname);
+      if (method === 'POST' && viewOnceOpenMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, msgId] = viewOnceOpenMatch;
+        const out = await storage.openViewOnceMessage(chatId, msgId, me.username);
+        if (!out) return sendJson(res, 404, { error: 'View-Once message not found.' });
+
+        auditLogger.log({
+          action: 'MESSAGE_VIEW_ONCE_OPENED',
+          username: me.username,
+          req,
+          details: { chatId, messageId: msgId, immediateBurn: out.immediateBurn }
+        });
+
+        // Notify sender & other participants that this View-Once message was opened/consumed
+        emitSanitizedMessageEvent(out.meta.participants, 'message_updated', chatId, out.updatedMessage);
+        if (!out.immediateBurn) {
+          const t = setTimeout(async () => {
+            try {
+              const burned = await storage.burnViewOnceMessage(chatId, msgId, me.username);
+              if (burned && burned.message && burned.meta) {
+                emitSanitizedMessageEvent(burned.meta.participants, 'message_updated', chatId, burned.message);
+              }
+            } catch {
+              // Ignore
+            }
+          }, 65 * 1000);
+          if (typeof t.unref === 'function') t.unref();
+        }
+
+        return sendJson(res, 200, {
+          message: out.revealedMessage,
+          consumed: out.immediateBurn
+        });
+      }
+
+      const viewOnceBurnMatch = /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/view-once\/burn$/.exec(pathname);
+      if (method === 'POST' && viewOnceBurnMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, msgId] = viewOnceBurnMatch;
+        const burned = await storage.burnViewOnceMessage(chatId, msgId, me.username);
+        if (!burned) return sendJson(res, 404, { error: 'View-Once message not found.' });
+        emitSanitizedMessageEvent(burned.meta.participants, 'message_updated', chatId, burned.message);
+        return sendJson(res, 200, {
+          ok: true,
+          message: storage.sanitizeMessageForViewer(burned.message, me.username)
+        });
+      }
+
+      // In-Chat Polls & Quizzes
+      const chatPollsMatch = /^\/api\/chats\/([^/]+)\/polls$/.exec(pathname);
+      if (method === 'POST' && chatPollsMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const chatId = chatPollsMatch[1];
+        const body = await readJsonBody(req);
+        if (!groups.isGroupOrChannelId(chatId)) {
+          const parts = chatId.startsWith('dm_') ? chatId.slice(3).split('__') : [];
+          if (parts.length === 2 && parts.includes(me.username)) {
+            const peer = parts.find((p) => p !== me.username) || parts[0];
+            await storage.ensureChatFolder(me.username, peer);
+          }
+        }
+        const { message, meta } = await polls.createPoll({
+          chatId,
+          creatorUsername: me.username,
+          question: body.question,
+          options: body.options,
+          mode: body.mode,
+          multiple: body.multiple,
+          anonymous: body.anonymous,
+          correctOptionIndex: body.correctOptionIndex,
+          explanation: body.explanation
+        });
+        auditLogger.log({
+          action: 'POLL_CREATED',
+          username: me.username,
+          req,
+          details: { chatId, pollId: message.poll.id, mode: message.poll.mode }
+        });
+        emitSanitizedMessageEvent(meta.participants, 'new_message', chatId, message, {
+          meta,
+          senderProfile: enrichUser(me)
+        });
+        dispatchChatPushNotifications(meta, me, message);
+        return sendJson(res, 201, {
+          message: storage.sanitizeMessageForViewer(message, me.username),
+          meta
+        });
+      }
+
+      const pollVoteMatch = /^\/api\/chats\/([^/]+)\/polls\/([^/]+)\/vote$/.exec(pathname);
+      if (method === 'POST' && pollVoteMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, pollId] = pollVoteMatch;
+        const body = await readJsonBody(req);
+        const { message, meta } = await polls.votePoll({
+          chatId,
+          pollId,
+          voterUsername: me.username,
+          optionIndexes: Array.isArray(body.optionIndexes)
+            ? body.optionIndexes
+            : (body.optionIndex !== undefined ? [body.optionIndex] : [])
+        });
+        emitSanitizedMessageEvent(meta.participants, 'message_updated', chatId, message);
+        return sendJson(res, 200, {
+          message: storage.sanitizeMessageForViewer(message, me.username)
+        });
+      }
+
+      const pollCloseMatch = /^\/api\/chats\/([^/]+)\/polls\/([^/]+)\/close$/.exec(pathname);
+      if (method === 'POST' && pollCloseMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, pollId] = pollCloseMatch;
+        const { message, meta } = await polls.closePoll({
+          chatId,
+          pollId,
+          requesterUsername: me.username
+        });
+        emitSanitizedMessageEvent(meta.participants, 'message_updated', chatId, message);
+        return sendJson(res, 200, {
+          message: storage.sanitizeMessageForViewer(message, me.username)
+        });
+      }
+
+      // Push Notification Registration & Test Endpoints (Web Push + Android FCM)
+      if (method === 'GET' && pathname === '/api/push/config') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        return sendJson(res, 200, await pushService.getPublicConfig());
+      }
+
+      if (method === 'POST' && pathname === '/api/push/web/subscribe') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const saved = await storage.saveWebPushSubscription(me.username, body.subscription || body);
+        if (!saved) return sendJson(res, 400, { error: 'Invalid Web Push subscription.' });
+        return sendJson(res, 200, { ok: true, count: saved.webSubscriptions.length });
+      }
+
+      if (method === 'POST' && pathname === '/api/push/web/unsubscribe') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        await storage.removeWebPushSubscription(me.username, body.endpoint || '');
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (method === 'POST' && pathname === '/api/push/fcm/register') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        const saved = await storage.saveFcmToken(me.username, body.token, body.platform || 'android');
+        if (!saved) return sendJson(res, 400, { error: 'Valid FCM device token is required.' });
+        auditLogger.log({
+          action: 'FCM_TOKEN_REGISTERED',
+          username: me.username,
+          req,
+          details: { platform: body.platform || 'android', count: saved.fcmTokens.length }
+        });
+        return sendJson(res, 200, { ok: true, count: saved.fcmTokens.length });
+      }
+
+      if (method === 'POST' && pathname === '/api/push/fcm/unregister') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const body = await readJsonBody(req);
+        await storage.removeFcmToken(me.username, body.token || '');
+        return sendJson(res, 200, { ok: true });
+      }
+
+      if (method === 'POST' && pathname === '/api/push/test') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const result = await pushService.notifyUser(me.username, {
+          title: 'VibeRoom Push Test',
+          body: 'Background push notifications are active on this device! 🔔',
+          tag: 'vr_push_test',
+          urgency: 'high',
+          data: { chatId: '', sender: me.username }
+        }, { ignoreMute: true });
+        return sendJson(res, 200, { ok: true, ...result });
+      }
+
       // Serve uploaded chat image or file (authenticated participants only)
       const fileMatch = /^\/api\/chats\/([^/]+)\/files\/([^/]+)$/.exec(pathname);
       if (method === 'GET' && fileMatch) {
         const me = await requireAuth(req, res);
         if (!me) return;
         const [, chatId, storedName] = fileMatch;
-        const filePath = await storage.getChatFilePath(chatId, storedName, me.username);
+        const viewToken = urlObj.searchParams.get('viewToken') || '';
+        const filePath = await storage.getChatFilePath(chatId, storedName, me.username, viewToken);
         if (!filePath) return sendJson(res, 404, { error: 'File not found.' });
         const forceDownload = urlObj.searchParams.get('download') === '1';
         const originalName = storedName.replace(/^[a-f0-9]{16}_/, '');
@@ -1594,6 +1832,15 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
       // ===================================================================
       // Playable Chat Mini-Games
       // ===================================================================
+      if (method === 'GET' && pathname === '/api/games/leaderboard') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const relList = await friends.listFriendsData(me.username);
+        const friendUsernames = Array.isArray(relList.friends) ? relList.friends.map((f) => f.username) : [];
+        const board = await storage.getGameLeaderboard(me.username, friendUsernames);
+        return sendJson(res, 200, board);
+      }
+
       const gameCreateMatch = /^\/api\/chats\/([^/]+)\/games$/.exec(pathname);
       if (method === 'POST' && gameCreateMatch) {
         const me = await requireAuth(req, res);
@@ -1625,6 +1872,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           meta,
           senderProfile: enrichUser(me)
         });
+        dispatchChatPushNotifications(meta, me, message);
         return sendJson(res, 201, { message, meta });
       }
 
@@ -1803,6 +2051,13 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           req,
           details: { callId: result.call.id, target: result.call.callee, mode: result.call.mode }
         });
+        pushService.notifyUser(result.call.callee, {
+          title: `Incoming ${result.call.mode === 'video' ? 'Video' : 'Audio'} Call`,
+          body: `${me.displayName || me.username} is calling you on VibeRoom`,
+          tag: `call_${result.call.id}`,
+          urgency: 'high',
+          data: { chatId: result.call.chatId || '', sender: me.username, type: 'call' }
+        }, { chatId: result.call.chatId || null }).catch(() => {});
         return sendJson(res, 201, result);
       }
 

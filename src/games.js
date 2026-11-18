@@ -548,6 +548,10 @@ function createGamesService({ storage, friends = null }) {
       throw err;
     }
 
+    if (result.message && result.message.game && result.message.game.status === 'finished' && typeof storage.recordGameOutcome === 'function') {
+      await storage.recordGameOutcome(result.message.game).catch(() => {});
+    }
+
     return result;
   }
 
@@ -589,6 +593,10 @@ function createGamesService({ storage, friends = null }) {
       const err = new Error('Game not found.');
       err.statusCode = 404;
       throw err;
+    }
+
+    if (result.message && result.message.game && result.message.game.status === 'finished' && typeof storage.recordGameOutcome === 'function') {
+      await storage.recordGameOutcome(result.message.game).catch(() => {});
     }
 
     return result;

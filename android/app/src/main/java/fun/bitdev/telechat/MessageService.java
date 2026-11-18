@@ -293,34 +293,37 @@ public class MessageService extends Service {
         }
     }
 
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager == null) return;
+    public static void ensureNotificationChannels(Context ctx) {
+        if (ctx == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+        NotificationManager manager = ctx.getSystemService(NotificationManager.class);
+        if (manager == null) return;
 
-            NotificationChannel msgChannel = new NotificationChannel(
-                CHANNEL_MESSAGES,
-                "Messages",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            msgChannel.setDescription("Incoming chat message notifications");
-            msgChannel.enableVibration(true);
-            msgChannel.enableLights(true);
-            manager.createNotificationChannel(msgChannel);
+        NotificationChannel msgChannel = new NotificationChannel(
+            CHANNEL_MESSAGES,
+            "Messages",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        msgChannel.setDescription("Incoming chat message notifications");
+        msgChannel.enableVibration(true);
+        msgChannel.enableLights(true);
+        manager.createNotificationChannel(msgChannel);
 
-            NotificationChannel callChannel = new NotificationChannel(
-                CHANNEL_CALLS,
-                "Incoming Calls",
-                NotificationManager.IMPORTANCE_HIGH
-            );
-            callChannel.setDescription("Incoming voice and video call alerts");
-            callChannel.enableVibration(true);
-            callChannel.enableLights(true);
-            manager.createNotificationChannel(callChannel);
-        }
+        NotificationChannel callChannel = new NotificationChannel(
+            CHANNEL_CALLS,
+            "Incoming Calls",
+            NotificationManager.IMPORTANCE_HIGH
+        );
+        callChannel.setDescription("Incoming voice and video call alerts");
+        callChannel.enableVibration(true);
+        callChannel.enableLights(true);
+        manager.createNotificationChannel(callChannel);
     }
 
-    private static void showIncomingCallNotification(Context ctx, String callerName, String mode, String chatId) {
+    private void createNotificationChannel() {
+        ensureNotificationChannels(this);
+    }
+
+    public static void showIncomingCallNotification(Context ctx, String callerName, String mode, String chatId) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 return;

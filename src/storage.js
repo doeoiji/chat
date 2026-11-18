@@ -1498,6 +1498,9 @@ function createStorage(config) {
     if (Array.isArray(msg.deletedFor) && msg.deletedFor.includes(username)) {
       return true;
     }
+    if (msg.expiresAt && new Date(msg.expiresAt).getTime() <= Date.now()) {
+      return true;
+    }
     const clearedIso = meta && meta.clearedBeforeByUser && meta.clearedBeforeByUser[username];
     if (clearedIso && msg && msg.createdAt) {
       if (new Date(msg.createdAt).getTime() <= new Date(clearedIso).getTime()) {
@@ -1621,17 +1624,26 @@ function createStorage(config) {
       err.statusCode = 404;
       throw err;
     }
+    await purgeExpiredInChat(chatId);
+    const updatedMeta = (await getChatMeta(chatId)) || meta;
     const folder = chatFolder(chatId);
     const allMessages = (await readJson(path.join(folder, 'messages.json'), [])) || [];
-    const messages = allMessages.filter((m) => !isMessageHiddenForUser(m, meta, username));
-    return { meta: getVisibleChatMeta(meta, username), messages };
+    const messages = allMessages
+      .filter((m) => !isMessageHiddenForUser(m, updatedMeta, username))
+      .map((m) => sanitizeMessageForViewer(m, username));
+    return { meta: getVisibleChatMeta(updatedMeta, username), messages };
   }
 
   function buildLastMessageSummary(msg) {
     if (!msg) return null;
     const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
     let preview = '';
-    if (msg.game) {
+    if (msg.viewOnce) {
+      preview = msg.consumed ? '🔥 View-Once opened' : '🔒 View-Once message';
+    } else if (msg.poll) {
+      const icon = msg.poll.mode === 'quiz' ? '🧠 Quiz' : '📊 Poll';
+      preview = `${icon}: ${msg.poll.question || ''}`.slice(0, 80);
+    } else if (msg.game) {
       preview = `🎮 ${msg.game.title || msg.game.type}`;
     } else if (msg.call) {
       const icon = msg.call.mode === 'video' ? '📹 Video call' : '📞 Audio call';
@@ -1662,10 +1674,84 @@ function createStorage(config) {
       id: msg.id,
       sender: msg.sender,
       preview,
-      hasImage: atts.some((a) => a.isImage),
-      hasFile: atts.some((a) => !a.isImage),
+      hasImage: !msg.viewOnce && atts.some((a) => a.isImage),
+      hasFile: !msg.viewOnce && atts.some((a) => !a.isImage),
       createdAt: msg.createdAt
     };
+  }
+
+  function sanitizeVoiceMeta(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const durationSec = Math.max(0, Math.min(3600, Math.round(Number(raw.durationSec) || 0)));
+    const peaks = Array.isArray(raw.peaks)
+      ? raw.peaks.slice(0, 48).map((n) => Math.max(5, Math.min(100, Math.round(Number(n) || 12))))
+      : null;
+    if (!durationSec && (!peaks || peaks.length === 0)) return null;
+    return {
+      durationSec,
+      peaks: peaks && peaks.length > 0 ? peaks : undefined
+    };
+  }
+
+  function sanitizeMessageForViewer(msg, viewerUsername) {
+    if (!msg || typeof msg !== 'object') return msg;
+    let out = msg;
+    if (msg.poll && msg.poll.mode === 'quiz') {
+      const cleanViewer = String(viewerUsername || '').trim().toLowerCase();
+      const opts = Array.isArray(msg.poll.options) ? msg.poll.options : [];
+      const hasVoted = opts.some((o) => Array.isArray(o.votes) && o.votes.includes(cleanViewer));
+      const canSeeAnswer = Boolean(msg.poll.closed) || msg.poll.creator === cleanViewer || hasVoted;
+      if (!canSeeAnswer) {
+        out = {
+          ...out,
+          poll: {
+            ...msg.poll,
+            correctOptionIndex: null,
+            explanation: ''
+          }
+        };
+      }
+    }
+    if (msg.viewOnce) {
+      const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+      const firstAtt = atts[0] || null;
+      const hint = {
+        hasText: Boolean(msg.text),
+        hasImage: atts.some((a) => a.isImage),
+        isVoice: Boolean(firstAtt && firstAtt.mimeType && firstAtt.mimeType.startsWith('audio/')),
+        isVideo: Boolean(firstAtt && firstAtt.mimeType && firstAtt.mimeType.startsWith('video/')),
+        hasFile: atts.length > 0,
+        fileName: firstAtt ? firstAtt.originalName : ''
+      };
+      if (msg.consumed) {
+        return {
+          ...out,
+          text: '',
+          attachments: [],
+          sticker: undefined,
+          linkPreview: undefined,
+          viewOnceHint: hint,
+          viewOnceState: 'consumed'
+        };
+      }
+      if (msg.sender !== viewerUsername) {
+        return {
+          ...out,
+          text: '',
+          attachments: [],
+          sticker: undefined,
+          linkPreview: undefined,
+          viewOnceHint: hint,
+          viewOnceState: 'sealed'
+        };
+      }
+      return {
+        ...out,
+        viewOnceHint: hint,
+        viewOnceState: 'sent'
+      };
+    }
+    return out;
   }
 
   function sanitizeStickerPayload(raw) {
@@ -1684,7 +1770,22 @@ function createStorage(config) {
     };
   }
 
-  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', sticker = null, game = null, call = null, forwardedFrom = null, linkPreview = null, allowChannelSystem = false }) {
+  async function appendChatMessage(chatId, senderUsername, {
+    text = '',
+    files = [],
+    replyToId = null,
+    kind = 'text',
+    sticker = null,
+    game = null,
+    call = null,
+    poll = null,
+    voiceMeta = null,
+    ttlSeconds = 0,
+    viewOnce = false,
+    forwardedFrom = null,
+    linkPreview = null,
+    allowChannelSystem = false
+  }) {
     const folder = chatFolder(chatId);
     if (!folder) {
       const err = new Error('Invalid chat ID.');
@@ -1694,7 +1795,10 @@ function createStorage(config) {
 
     const cleanText = typeof text === 'string' ? text.trim().slice(0, 4000) : '';
     const cleanSticker = sanitizeStickerPayload(sticker);
-    if (!cleanText && (!files || files.length === 0) && !game && !call && !cleanSticker) {
+    const cleanVoiceMeta = sanitizeVoiceMeta(voiceMeta);
+    const cleanTtl = Math.max(0, Math.min(7 * 24 * 3600, Math.round(Number(ttlSeconds) || 0)));
+    const isViewOnce = Boolean(viewOnce && !game && !call && !poll && !String(chatId).startsWith('saved_'));
+    if (!cleanText && (!files || files.length === 0) && !game && !call && !poll && !cleanSticker) {
       const err = new Error('Message text or at least one file is required.');
       err.statusCode = 400;
       throw err;
@@ -1757,14 +1861,17 @@ function createStorage(config) {
 
       const now = new Date().toISOString();
       const mentions = extractMentions(cleanText);
-      const allowedKind = kind === 'sticker' || kind === 'gif' ? kind : 'text';
+      const allowedKind = kind === 'sticker' || kind === 'gif' || kind === 'poll' ? kind : 'text';
       const inferredGif = attachments.length === 1 && !cleanText && (attachments[0].mimeType === 'image/gif' || /\.gif$/i.test(attachments[0].originalName || ''));
-      const msgKind = game
-        ? 'game'
-        : (call ? 'call' : (cleanSticker ? cleanSticker.type : (allowedKind !== 'text' ? allowedKind : (inferredGif ? 'gif' : 'text'))));
+      const msgKind = poll
+        ? 'poll'
+        : (game
+          ? 'game'
+          : (call ? 'call' : (cleanSticker ? cleanSticker.type : (allowedKind !== 'text' ? allowedKind : (inferredGif ? 'gif' : 'text')))));
       const readBy = call && call.status !== 'missed' && Array.isArray(meta.participants)
         ? meta.participants.slice()
         : [senderUsername];
+      const expiresAt = cleanTtl > 0 ? new Date(Date.now() + cleanTtl * 1000).toISOString() : undefined;
       const message = {
         id: `msg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
         chatId,
@@ -1773,10 +1880,17 @@ function createStorage(config) {
         text: cleanText,
         mentions,
         attachments,
+        voiceMeta: cleanVoiceMeta || undefined,
+        ttlSeconds: cleanTtl > 0 ? cleanTtl : undefined,
+        expiresAt,
+        viewOnce: isViewOnce ? true : undefined,
+        viewedBy: isViewOnce ? [] : undefined,
+        consumed: isViewOnce ? false : undefined,
         replyTo: replySnapshot,
         forwardedFrom: forwardedFrom || undefined,
         linkPreview: linkPreview || undefined,
         sticker: cleanSticker || undefined,
+        poll: poll || undefined,
         game: game || undefined,
         call: call || undefined,
         reactions: {},
@@ -1930,7 +2044,7 @@ function createStorage(config) {
         err.statusCode = 403;
         throw err;
       }
-      if (msg.kind === 'game' || msg.kind === 'call' || msg.kind === 'system') {
+      if (msg.kind === 'game' || msg.kind === 'call' || msg.kind === 'system' || msg.kind === 'poll' || msg.viewOnce) {
         const err = new Error('This message type cannot be edited.');
         err.statusCode = 400;
         throw err;
@@ -2339,7 +2453,414 @@ function createStorage(config) {
     return created;
   }
 
-  async function getChatFilePath(chatId, storedName, username) {
+  // =========================================================================
+  // Push Notification Subscriptions & FCM Tokens
+  // =========================================================================
+  async function getUserPushTokens(username) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder) return { webSubscriptions: [], fcmTokens: [] };
+    const data = await readJson(path.join(folder, 'push_tokens.json'), {});
+    return {
+      webSubscriptions: Array.isArray(data && data.webSubscriptions) ? data.webSubscriptions : [],
+      fcmTokens: Array.isArray(data && data.fcmTokens) ? data.fcmTokens : []
+    };
+  }
+
+  async function saveWebPushSubscription(username, subscription) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder || !subscription || typeof subscription.endpoint !== 'string') return null;
+    const keys = subscription.keys && typeof subscription.keys === 'object' ? subscription.keys : {};
+    if (typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') return null;
+
+    const cleanSub = {
+      endpoint: subscription.endpoint.trim(),
+      keys: {
+        p256dh: keys.p256dh.trim(),
+        auth: keys.auth.trim()
+      },
+      addedAt: new Date().toISOString()
+    };
+
+    return withLock(`pushtokens:${clean}`, async () => {
+      const p = path.join(folder, 'push_tokens.json');
+      const cur = await getUserPushTokens(clean);
+      const filtered = cur.webSubscriptions.filter((s) => s.endpoint !== cleanSub.endpoint);
+      filtered.push(cleanSub);
+      const next = {
+        webSubscriptions: filtered.slice(-10),
+        fcmTokens: cur.fcmTokens
+      };
+      await writeJsonAtomic(p, next);
+      return next;
+    });
+  }
+
+  async function removeWebPushSubscription(username, endpoint) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder || !endpoint) return null;
+    return withLock(`pushtokens:${clean}`, async () => {
+      const p = path.join(folder, 'push_tokens.json');
+      const cur = await getUserPushTokens(clean);
+      const next = {
+        webSubscriptions: cur.webSubscriptions.filter((s) => s.endpoint !== endpoint),
+        fcmTokens: cur.fcmTokens
+      };
+      await writeJsonAtomic(p, next);
+      return next;
+    });
+  }
+
+  async function saveFcmToken(username, token, platform = 'android') {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    const cleanToken = String(token || '').trim().slice(0, 512);
+    if (!folder || !cleanToken) return null;
+
+    return withLock(`pushtokens:${clean}`, async () => {
+      const p = path.join(folder, 'push_tokens.json');
+      const cur = await getUserPushTokens(clean);
+      const filtered = cur.fcmTokens.filter((t) => t.token !== cleanToken);
+      filtered.push({ token: cleanToken, platform: String(platform || 'android').slice(0, 24), updatedAt: new Date().toISOString() });
+      const next = {
+        webSubscriptions: cur.webSubscriptions,
+        fcmTokens: filtered.slice(-10)
+      };
+      await writeJsonAtomic(p, next);
+      return next;
+    });
+  }
+
+  async function removeFcmToken(username, token) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    const cleanToken = String(token || '').trim();
+    if (!folder || !cleanToken) return null;
+    return withLock(`pushtokens:${clean}`, async () => {
+      const p = path.join(folder, 'push_tokens.json');
+      const cur = await getUserPushTokens(clean);
+      const next = {
+        webSubscriptions: cur.webSubscriptions,
+        fcmTokens: cur.fcmTokens.filter((t) => t.token !== cleanToken)
+      };
+      await writeJsonAtomic(p, next);
+      return next;
+    });
+  }
+
+  // =========================================================================
+  // Disappearing Messages Expiry & View-Once Consumption
+  // =========================================================================
+  const viewOnceTokens = new Map(); // token -> { chatId, messageId, username, expiresAt }
+
+  function pruneExpiredViewTokens() {
+    const now = Date.now();
+    for (const [k, v] of viewOnceTokens.entries()) {
+      if (v.expiresAt <= now) viewOnceTokens.delete(k);
+    }
+  }
+
+  async function removeChatAttachmentsFromDisk(folder, msg) {
+    if (!msg || !Array.isArray(msg.attachments)) return;
+    for (const att of msg.attachments) {
+      if (att && att.storedName) {
+        const fPath = path.join(folder, 'files', path.basename(att.storedName));
+        await fsp.unlink(fPath).catch(() => {});
+      }
+    }
+  }
+
+  async function purgeExpiredInChat(chatId) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+    const nowMs = Date.now();
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const meta = await readJson(metaPath);
+      if (!meta) return null;
+      const messages = (await readJson(messagesPath, [])) || [];
+      const expired = [];
+      const kept = [];
+      for (const m of messages) {
+        if (m && m.expiresAt && new Date(m.expiresAt).getTime() <= nowMs) {
+          expired.push(m);
+        } else {
+          kept.push(m);
+        }
+      }
+      if (expired.length === 0) return null;
+
+      for (const m of expired) {
+        await removeChatAttachmentsFromDisk(folder, m);
+      }
+      await writeJsonAtomic(messagesPath, kept);
+
+      if (meta.pinnedMessage && expired.some((m) => m.id === meta.pinnedMessage.id)) {
+        meta.pinnedMessage = null;
+      }
+      const lastVisible = kept.length > 0 ? kept[kept.length - 1] : null;
+      meta.lastMessage = buildLastMessageSummary(lastVisible);
+      await writeJsonAtomic(metaPath, meta);
+      return {
+        chatId,
+        participants: meta.participants || [],
+        expiredIds: expired.map((m) => m.id),
+        meta
+      };
+    });
+  }
+
+  async function purgeAllExpiredMessages() {
+    if (!fs.existsSync(config.chatsDir)) return [];
+    const entries = await fsp.readdir(config.chatsDir, { withFileTypes: true }).catch(() => []);
+    const purged = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !CHAT_ID_REGEX.test(entry.name)) continue;
+      const res = await purgeExpiredInChat(entry.name).catch(() => null);
+      if (res && res.expiredIds.length > 0) purged.push(res);
+    }
+    return purged;
+  }
+
+  async function openViewOnceMessage(chatId, messageId, viewerUsername) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+    pruneExpiredViewTokens();
+
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const meta = await readJson(metaPath);
+      if (!meta || !meta.participants.includes(viewerUsername)) return null;
+
+      const messages = (await readJson(messagesPath, [])) || [];
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg || !msg.viewOnce) return null;
+
+      if (msg.sender === viewerUsername) {
+        const err = new Error('View-Once messages can only be unlocked by the recipient.');
+        err.statusCode = 403;
+        throw err;
+      }
+      if (msg.consumed) {
+        const err = new Error('This View-Once message has already been opened and self-destructed.');
+        err.statusCode = 410;
+        throw err;
+      }
+
+      const revealedCopy = JSON.parse(JSON.stringify(msg));
+      if (!Array.isArray(msg.viewedBy)) msg.viewedBy = [];
+      if (!msg.viewedBy.includes(viewerUsername)) msg.viewedBy.push(viewerUsername);
+      msg.openedAt = new Date().toISOString();
+
+      const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0;
+      let viewToken = null;
+
+      if (!hasAttachments) {
+        // Text-only / sticker view-once: burn stored copy immediately after cloning response payload
+        msg.consumed = true;
+        msg.consumedAt = msg.openedAt;
+        msg.text = '';
+        msg.sticker = undefined;
+        msg.linkPreview = undefined;
+      } else {
+        viewToken = crypto.randomBytes(16).toString('hex');
+        viewOnceTokens.set(viewToken, {
+          chatId,
+          messageId: msg.id,
+          username: viewerUsername,
+          expiresAt: Date.now() + 90 * 1000
+        });
+        revealedCopy.attachments = revealedCopy.attachments.map((att) => ({
+          ...att,
+          url: `${att.url}?viewToken=${encodeURIComponent(viewToken)}`
+        }));
+      }
+
+      if (meta.lastMessage && meta.lastMessage.id === msg.id) {
+        meta.lastMessage = buildLastMessageSummary(msg);
+        await writeJsonAtomic(metaPath, meta);
+      }
+      await writeJsonAtomic(messagesPath, messages);
+
+      return {
+        revealedMessage: revealedCopy,
+        updatedMessage: sanitizeMessageForViewer(msg, msg.sender),
+        viewerMessage: sanitizeMessageForViewer(msg, viewerUsername),
+        viewToken,
+        immediateBurn: !hasAttachments,
+        meta
+      };
+    });
+  }
+
+  async function burnViewOnceMessage(chatId, messageId, requesterUsername) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const meta = await readJson(metaPath);
+      if (!meta || !meta.participants.includes(requesterUsername)) return null;
+
+      const messages = (await readJson(messagesPath, [])) || [];
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg || !msg.viewOnce) return null;
+
+      await removeChatAttachmentsFromDisk(folder, msg);
+      msg.consumed = true;
+      msg.consumedAt = new Date().toISOString();
+      msg.text = '';
+      msg.attachments = [];
+      msg.sticker = undefined;
+      msg.linkPreview = undefined;
+
+      for (const [tk, info] of viewOnceTokens.entries()) {
+        if (info.chatId === chatId && info.messageId === messageId) {
+          viewOnceTokens.delete(tk);
+        }
+      }
+
+      if (meta.lastMessage && meta.lastMessage.id === msg.id) {
+        meta.lastMessage = buildLastMessageSummary(msg);
+        await writeJsonAtomic(metaPath, meta);
+      }
+      await writeJsonAtomic(messagesPath, messages);
+
+      return {
+        message: msg,
+        meta
+      };
+    });
+  }
+
+  // =========================================================================
+  // Game Stats, Streaks & Friends Leaderboard
+  // =========================================================================
+  function emptyGameStats() {
+    return {
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      played: 0,
+      currentStreak: 0,
+      bestStreak: 0,
+      byGame: {},
+      vs: {},
+      updatedAt: null
+    };
+  }
+
+  async function getUserGameStats(username) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder) return emptyGameStats();
+    const data = await readJson(path.join(folder, 'game_stats.json'), null);
+    return data && typeof data === 'object' ? { ...emptyGameStats(), ...data } : emptyGameStats();
+  }
+
+  async function recordSinglePlayerGameStat(username, { gameType, opponent, outcome }) {
+    const clean = String(username || '').trim().toLowerCase();
+    const folder = userFolder(clean);
+    if (!folder) return null;
+    return withLock(`gamestats:${clean}`, async () => {
+      const p = path.join(folder, 'game_stats.json');
+      const stats = await getUserGameStats(clean);
+      stats.played += 1;
+      if (outcome === 'win') {
+        stats.wins += 1;
+        stats.currentStreak += 1;
+        if (stats.currentStreak > stats.bestStreak) stats.bestStreak = stats.currentStreak;
+      } else if (outcome === 'loss') {
+        stats.losses += 1;
+        stats.currentStreak = 0;
+      } else {
+        stats.draws += 1;
+      }
+
+      if (!stats.byGame[gameType]) {
+        stats.byGame[gameType] = { wins: 0, losses: 0, draws: 0, played: 0 };
+      }
+      stats.byGame[gameType].played += 1;
+      if (outcome === 'win') stats.byGame[gameType].wins += 1;
+      else if (outcome === 'loss') stats.byGame[gameType].losses += 1;
+      else stats.byGame[gameType].draws += 1;
+
+      if (opponent && opponent !== clean) {
+        if (!stats.vs[opponent]) {
+          stats.vs[opponent] = { wins: 0, losses: 0, draws: 0, currentStreak: 0 };
+        }
+        if (outcome === 'win') {
+          stats.vs[opponent].wins += 1;
+          stats.vs[opponent].currentStreak += 1;
+        } else if (outcome === 'loss') {
+          stats.vs[opponent].losses += 1;
+          stats.vs[opponent].currentStreak = 0;
+        } else {
+          stats.vs[opponent].draws += 1;
+        }
+      }
+
+      stats.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(p, stats);
+      return stats;
+    });
+  }
+
+  async function recordGameOutcome(game) {
+    if (!game || game.status !== 'finished' || !Array.isArray(game.players) || game.players.length < 2) {
+      return;
+    }
+    const [p1, p2] = game.players;
+    const gameType = game.type || 'tictactoe';
+    if (game.draw || !game.winner) {
+      await recordSinglePlayerGameStat(p1, { gameType, opponent: p2, outcome: 'draw' });
+      await recordSinglePlayerGameStat(p2, { gameType, opponent: p1, outcome: 'draw' });
+    } else {
+      const winner = game.winner;
+      const loser = winner === p1 ? p2 : p1;
+      await recordSinglePlayerGameStat(winner, { gameType, opponent: loser, outcome: 'win' });
+      await recordSinglePlayerGameStat(loser, { gameType, opponent: winner, outcome: 'loss' });
+    }
+  }
+
+  async function getGameLeaderboard(viewerUsername, friendUsernames = []) {
+    const cleanViewer = String(viewerUsername || '').trim().toLowerCase();
+    const candidates = Array.from(new Set([cleanViewer, ...friendUsernames.map((u) => String(u).trim().toLowerCase())].filter(Boolean)));
+    const rows = [];
+    for (const u of candidates) {
+      const raw = await getRawProfile(u);
+      if (!raw || raw.deleted) continue;
+      const stats = await getUserGameStats(u);
+      const score = stats.wins * 3 + stats.draws;
+      rows.push({
+        username: u,
+        displayName: raw.displayName || u,
+        avatarColor: raw.avatarColor || AVATAR_GRADIENTS[0],
+        avatarUrl: raw.avatarUrl || null,
+        wins: stats.wins,
+        losses: stats.losses,
+        draws: stats.draws,
+        played: stats.played,
+        currentStreak: stats.currentStreak,
+        bestStreak: stats.bestStreak,
+        score,
+        isMe: u === cleanViewer
+      });
+    }
+    rows.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      return b.bestStreak - a.bestStreak;
+    });
+    const myStats = await getUserGameStats(cleanViewer);
+    return { myStats, leaderboard: rows };
+  }
+
+  async function getChatFilePath(chatId, storedName, username, viewToken = '') {
     const meta = await getChatMeta(chatId);
     if (!meta || !meta.participants.includes(username)) return null;
 
@@ -2349,6 +2870,27 @@ function createStorage(config) {
     const safeName = path.basename(String(storedName || ''));
     const fullPath = path.resolve(filesDir, safeName);
     if (!fullPath.startsWith(filesDir + path.sep)) return null;
+
+    const messages = (await readJson(path.join(folder, 'messages.json'), [])) || [];
+    const owningMsg = messages.find(
+      (m) => Array.isArray(m.attachments) && m.attachments.some((a) => a && a.storedName === safeName)
+    );
+    if (owningMsg) {
+      if (owningMsg.expiresAt && new Date(owningMsg.expiresAt).getTime() <= Date.now()) {
+        return null;
+      }
+      if (owningMsg.viewOnce) {
+        if (owningMsg.consumed) return null;
+        if (owningMsg.sender !== username) {
+          pruneExpiredViewTokens();
+          const tokenInfo = viewToken ? viewOnceTokens.get(String(viewToken)) : null;
+          if (!tokenInfo || tokenInfo.chatId !== chatId || tokenInfo.messageId !== owningMsg.id || tokenInfo.username !== username) {
+            return null;
+          }
+        }
+      }
+    }
+
     if (!fs.existsSync(fullPath)) return null;
     return fullPath;
   }
@@ -2412,7 +2954,20 @@ function createStorage(config) {
     deleteChatForUser,
     bulkDeleteChats,
     forwardMessages,
-    getChatFilePath
+    getChatFilePath,
+    getUserPushTokens,
+    saveWebPushSubscription,
+    removeWebPushSubscription,
+    saveFcmToken,
+    removeFcmToken,
+    purgeExpiredInChat,
+    purgeAllExpiredMessages,
+    openViewOnceMessage,
+    burnViewOnceMessage,
+    sanitizeMessageForViewer,
+    getUserGameStats,
+    recordGameOutcome,
+    getGameLeaderboard
   };
 }
 

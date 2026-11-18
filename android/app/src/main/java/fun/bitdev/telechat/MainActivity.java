@@ -33,6 +33,9 @@ import android.widget.FrameLayout;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.messaging.FirebaseMessaging;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -75,6 +78,7 @@ public class MainActivity extends Activity {
     private volatile boolean pageLoaded = false;
     private boolean pendingOpenUpdates = false;
     private volatile boolean activityVisible = true;
+    private static volatile MainActivity activeInstance = null;
     private UpdateManager updateManager;
     private final Map<String, SharedCachedFile> sharedFilesMap = new ConcurrentHashMap<>();
 
@@ -283,6 +287,8 @@ public class MainActivity extends Activity {
         requestNotificationPermissionIfNeeded();
         startMessageServiceIfPermitted();
         MessagePollJobService.schedule(this);
+        activeInstance = this;
+        initFirebaseMessagingToken();
         handleIntent(getIntent());
         webView.loadUrl(baseUrl);
         updateManager.checkForUpdate(false, true);
@@ -549,6 +555,31 @@ public class MainActivity extends Activity {
         ));
     }
 
+    private void initFirebaseMessagingToken() {
+        try {
+            FirebaseApp app = FirebaseApp.initializeApp(this);
+            if (app == null && FirebaseApp.getApps(this).isEmpty()) return;
+            FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
+                if (token != null && !token.isEmpty()) {
+                    ViberoomFcmService.saveCachedToken(MainActivity.this, token);
+                    notifyFcmTokenUpdated(token);
+                }
+            });
+        } catch (Throwable ignored) {
+            // Firebase not configured (no google-services.json); fallback polling service handles alerts
+        }
+    }
+
+    public static void notifyFcmTokenUpdated(String token) {
+        MainActivity inst = activeInstance;
+        if (inst == null || inst.webView == null || token == null || token.isEmpty()) return;
+        String quoted = JSONObject.quote(token);
+        inst.webView.post(() -> inst.webView.evaluateJavascript(
+            "if (window.__telechatOnFcmToken) { window.__telechatOnFcmToken(" + quoted + "); }",
+            null
+        ));
+    }
+
     private void openChatInWebView(String chatId) {
         String quoted = JSONObject.quote(chatId);
         webView.post(() -> webView.evaluateJavascript(
@@ -661,6 +692,11 @@ public class MainActivity extends Activity {
             if (username != null && !username.isEmpty() && isForeground) {
                 runOnUiThread(MainActivity.this::startMessageServiceIfPermitted);
             }
+        }
+
+        @JavascriptInterface
+        public String getFcmToken() {
+            return ViberoomFcmService.getCachedToken(MainActivity.this);
         }
 
         @JavascriptInterface

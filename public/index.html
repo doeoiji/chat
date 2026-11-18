@@ -482,6 +482,14 @@
                 <circle cx="17.5" cy="13.5" r="0.8" fill="currentColor" />
               </svg>
             </button>
+            <button id="open-poll-btn" class="icon-btn" type="button" title="Create Poll or Quiz" aria-label="Create Poll or Quiz">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <line x1="18" y1="20" x2="18" y2="10" />
+                <line x1="12" y1="20" x2="12" y2="4" />
+                <line x1="6" y1="20" x2="6" y2="14" />
+              </svg>
+            </button>
             <button id="toggle-chat-search-btn" class="icon-btn" type="button" title="Search in chat"
               aria-label="Search in chat">
               <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
@@ -581,7 +589,7 @@
           <div id="voice-rec-bar" class="voice-rec-bar hidden">
             <span class="voice-rec-dot"></span>
             <span id="voice-rec-timer" class="voice-rec-timer">0:00</span>
-            <span class="voice-rec-hint">Recording voice note...</span>
+            <div id="voice-rec-wave" class="voice-rec-wave" aria-hidden="true"></div>
             <button id="voice-cancel-btn" class="secondary-btn sm" type="button">Cancel</button>
             <button id="voice-send-btn" class="primary-btn sm" type="button">Send</button>
           </div>
@@ -614,6 +622,28 @@
 
             <div class="composer-input-wrap">
               <textarea id="message-input" rows="1" placeholder="Message" maxlength="4000"></textarea>
+            </div>
+
+            <div class="msg-timer-anchor">
+              <button id="msg-timer-btn" class="icon-btn composer-btn" type="button" title="Disappearing / View-Once mode"
+                aria-label="Disappearing or View-Once mode">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="13" r="8" />
+                  <polyline points="12 9 12 13 14.5 14.5" />
+                  <line x1="9" y1="2" x2="15" y2="2" />
+                </svg>
+                <span id="msg-timer-pill" class="msg-timer-pill hidden"></span>
+              </button>
+              <div id="msg-timer-popover" class="msg-timer-popover hidden" role="menu">
+                <div class="msg-timer-title">Self-Destruct / Privacy</div>
+                <button type="button" class="msg-timer-opt active" data-timer-mode="off">Off (Normal message)</button>
+                <button type="button" class="msg-timer-opt" data-timer-mode="viewOnce">👁 View Once (Burn on open)</button>
+                <button type="button" class="msg-timer-opt" data-timer-mode="10">⏱ 10 seconds</button>
+                <button type="button" class="msg-timer-opt" data-timer-mode="60">⏱ 1 minute</button>
+                <button type="button" class="msg-timer-opt" data-timer-mode="3600">⏱ 1 hour</button>
+                <button type="button" class="msg-timer-opt" data-timer-mode="86400">⏱ 24 hours</button>
+              </div>
             </div>
 
             <div class="emoji-picker-anchor">
@@ -1411,6 +1441,36 @@
         <div id="user-preview-meta" class="user-preview-meta"></div>
         <div id="user-preview-actions" class="user-preview-actions"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- View-Once Reveal Modal -->
+  <div id="view-once-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="view-once-title">
+    <div class="modal-backdrop" id="view-once-backdrop"></div>
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <h3 id="view-once-title">🔒 View-Once Message</h3>
+        <button id="view-once-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="view-once-body" class="view-once-body"></div>
+        <p class="vr-hint centered">This content will permanently self-destruct as soon as you close it.</p>
+        <div class="modal-actions">
+          <button id="view-once-done-btn" class="primary-btn full-width" type="button">Done &amp; Burn</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Poll / Quiz Creator Modal -->
+  <div id="poll-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="poll-modal-title">
+    <div class="modal-backdrop" id="poll-backdrop"></div>
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <h3 id="poll-modal-title">Create Poll / Quiz</h3>
+        <button id="poll-modal-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="poll-modal-body" class="modal-body"></div>
     </div>
   </div>
 

@@ -42,6 +42,7 @@
     pendingFiles: [],
     replyTo: null,
     editingMessage: null,
+    composeTimerMode: 'off',
     selectMode: false,
     selectedMsgIds: new Set(),
     chatSelectMode: false,
@@ -198,6 +199,7 @@
     callAudioBtn: $('call-audio-btn'),
     callVideoBtn: $('call-video-btn'),
     openGamesBtn: $('open-games-btn'),
+    openPollBtn: $('open-poll-btn'),
 
     chatSearchBar: $('chat-search-bar'),
     chatSearchInput: $('chat-search-input'),
@@ -229,6 +231,7 @@
     cancelEditBtn: $('cancel-edit-btn'),
     voiceRecBar: $('voice-rec-bar'),
     voiceRecTimer: $('voice-rec-timer'),
+    voiceRecWave: $('voice-rec-wave'),
     voiceCancelBtn: $('voice-cancel-btn'),
     voiceSendBtn: $('voice-send-btn'),
     replyBanner: $('reply-banner'),
@@ -242,6 +245,9 @@
     fileInput: $('file-input'),
     attachBtn: $('attach-btn'),
     messageInput: $('message-input'),
+    msgTimerBtn: $('msg-timer-btn'),
+    msgTimerPill: $('msg-timer-pill'),
+    msgTimerPopover: $('msg-timer-popover'),
     emojiBtn: $('emoji-btn'),
     emojiPopover: $('emoji-popover'),
     pickerTabs: $('picker-tabs'),
@@ -418,6 +424,12 @@
     msgContextBackdrop: $('msg-context-backdrop'),
     msgContextPopup: $('msg-context-popup'),
     msgContextReactions: $('msg-context-reactions'),
+
+    viewOnceModal: $('view-once-modal'),
+    viewOnceBackdrop: $('view-once-backdrop'),
+    viewOnceClose: $('view-once-close'),
+    viewOnceBody: $('view-once-body'),
+    viewOnceDoneBtn: $('view-once-done-btn'),
     msgContextCard: $('msg-context-card'),
 
     toastContainer: $('toast-container')
@@ -927,6 +939,78 @@
   }
 
   let swRegistration = null;
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  async function ensureWebPushSubscribed() {
+    if (!state.me || !state.prefs.notifications) return false;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false;
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return false;
+    try {
+      const reg = swRegistration || (await navigator.serviceWorker.ready);
+      if (!reg || !reg.pushManager) return false;
+      const cfg = await api('/api/push/config');
+      if (!cfg || !cfg.vapidPublicKey) return false;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(cfg.vapidPublicKey)
+        });
+      }
+      if (sub) {
+        await api('/api/push/web/subscribe', {
+          method: 'POST',
+          body: { subscription: sub.toJSON ? sub.toJSON() : sub }
+        });
+        return true;
+      }
+    } catch {
+      // PushManager may be unsupported (e.g. HTTP non-localhost or older WebView)
+    }
+    return false;
+  }
+
+  async function unsubscribeWebPush() {
+    try {
+      const reg = swRegistration || (navigator.serviceWorker ? await navigator.serviceWorker.ready : null);
+      if (!reg || !reg.pushManager) return;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        const endpoint = sub.endpoint;
+        await sub.unsubscribe().catch(() => {});
+        await api('/api/push/web/unsubscribe', { method: 'POST', body: { endpoint } }).catch(() => {});
+      }
+    } catch {
+      // Ignore unsubscribe failure
+    }
+  }
+
+  async function syncAndroidFcmToken(explicitToken = '') {
+    if (!state.me) return;
+    let token = String(explicitToken || '').trim();
+    if (!token && window.AndroidBridge && typeof window.AndroidBridge.getFcmToken === 'function') {
+      try { token = String(window.AndroidBridge.getFcmToken() || '').trim(); } catch { }
+    }
+    if (!token) return;
+    try {
+      await api('/api/push/fcm/register', {
+        method: 'POST',
+        body: { token, platform: 'android' }
+      });
+    } catch {
+      // Ignore transient FCM sync failures
+    }
+  }
+
   async function registerServiceWorker() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
     try {
@@ -936,6 +1020,9 @@
           openChatByIdOrSender(ev.data.chatId, ev.data.sender);
         }
       });
+      if (state.me && typeof Notification !== 'undefined' && Notification.permission === 'granted' && state.prefs.notifications) {
+        ensureWebPushSubscribed();
+      }
     } catch {
       // Ignore registration failure (e.g. insecure origin)
     }
@@ -963,6 +1050,7 @@
       savePrefs();
       syncSettingsUI();
       updateNotificationBanner();
+      ensureWebPushSubscribed();
       return true;
     }
     if (Notification.permission === 'denied') {
@@ -974,7 +1062,8 @@
     if (res === 'granted') {
       state.prefs.notifications = true;
       savePrefs();
-      showToast('Notifications enabled!', 'success');
+      await ensureWebPushSubscribed();
+      showToast('Background & desktop notifications enabled!', 'success');
     } else {
       state.prefs.notifications = false;
       savePrefs();
@@ -2398,6 +2487,248 @@
     }
   }
 
+  const VOICE_SPEEDS = [1, 1.5, 2];
+  const voicePlayerState = {
+    audio: null,
+    msgId: null,
+    url: null,
+    speedIdx: 0,
+    rafId: null
+  };
+
+  function formatVoiceTime(seconds) {
+    const s = Math.max(0, Math.floor(Number(seconds) || 0));
+    const mins = Math.floor(s / 60);
+    const secs = String(s % 60).padStart(2, '0');
+    return `${mins}:${secs}`;
+  }
+
+  function getVoicePeaks(msg, att) {
+    if (msg && msg.voiceMeta && Array.isArray(msg.voiceMeta.peaks) && msg.voiceMeta.peaks.length >= 8) {
+      return msg.voiceMeta.peaks;
+    }
+    const seedSrc = String((msg && msg.id) || (att && att.storedName) || 'voice');
+    let h = 2166136261;
+    for (let i = 0; i < seedSrc.length; i++) {
+      h ^= seedSrc.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    const bars = [];
+    for (let i = 0; i < 28; i++) {
+      h ^= (h << 13);
+      h ^= (h >>> 17);
+      h ^= (h << 5);
+      const env = Math.sin(((i + 1) / 29) * Math.PI);
+      const val = Math.round(18 + ((h >>> 0) % 58) * (0.45 + 0.55 * env));
+      bars.push(Math.max(14, Math.min(96, val)));
+    }
+    return bars;
+  }
+
+  function formatTtlShort(seconds) {
+    const s = Math.max(0, Math.ceil(Number(seconds) || 0));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) {
+      const m = Math.floor(s / 60);
+      const rem = s % 60;
+      return s < 120 ? `${m}:${String(rem).padStart(2, '0')}` : `${m}m`;
+    }
+    if (s < 86400) return `${Math.ceil(s / 3600)}h`;
+    return `${Math.ceil(s / 86400)}d`;
+  }
+
+  function formatTtlFromIso(expiresAt) {
+    const ms = new Date(expiresAt).getTime() - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0) return '0s';
+    return formatTtlShort(ms / 1000);
+  }
+
+  function getComposeTimerPayload() {
+    const m = state.composeTimerMode || 'off';
+    if (m === 'viewOnce') return { viewOnce: true, ttlSeconds: 0 };
+    const sec = Number(m);
+    if (Number.isFinite(sec) && sec > 0) return { viewOnce: false, ttlSeconds: sec };
+    return { viewOnce: false, ttlSeconds: 0 };
+  }
+
+  function syncComposerTimerUi() {
+    const mode = state.composeTimerMode || 'off';
+    if (els.msgTimerBtn) {
+      els.msgTimerBtn.classList.toggle('active', mode !== 'off');
+    }
+    if (els.msgTimerPill) {
+      if (mode === 'off') {
+        els.msgTimerPill.classList.add('hidden');
+        els.msgTimerPill.textContent = '';
+      } else {
+        const labels = { viewOnce: '1x', '10': '10s', '60': '1m', '3600': '1h', '86400': '24h' };
+        els.msgTimerPill.textContent = labels[mode] || mode;
+        els.msgTimerPill.classList.remove('hidden');
+      }
+    }
+    if (els.msgTimerPopover) {
+      els.msgTimerPopover.querySelectorAll('[data-timer-mode]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.timerMode === mode);
+      });
+    }
+  }
+
+  function syncVoicePlayerDom(msgId) {
+    if (typeof document === 'undefined') return;
+    document.querySelectorAll('.voice-player[data-voice-msg]').forEach((card) => {
+      const id = card.dataset.voiceMsg;
+      const isCurrent = id === voicePlayerState.msgId;
+      const audio = voicePlayerState.audio;
+      const isPlaying = isCurrent && audio && !audio.paused && !audio.ended;
+      card.classList.toggle('is-playing', Boolean(isPlaying));
+
+      const speedBtn = card.querySelector('.voice-speed-btn');
+      const rate = VOICE_SPEEDS[voicePlayerState.speedIdx] || 1;
+      if (speedBtn) {
+        speedBtn.textContent = isCurrent ? `${rate}x` : '1x';
+        speedBtn.classList.toggle('boosted', isCurrent && rate !== 1);
+      }
+
+      const fallbackDur = Number(card.dataset.voiceDuration) || 0;
+      const duration = isCurrent && audio && Number.isFinite(audio.duration) && audio.duration > 0
+        ? audio.duration
+        : fallbackDur;
+      const currentTime = isCurrent && audio ? (audio.currentTime || 0) : 0;
+      const pct = duration > 0 ? Math.max(0, Math.min(1, currentTime / duration)) : 0;
+
+      const timeEl = card.querySelector('.voice-time');
+      if (timeEl) {
+        timeEl.textContent = isCurrent && (currentTime > 0 || isPlaying)
+          ? `${formatVoiceTime(currentTime)} / ${formatVoiceTime(duration)}`
+          : (duration > 0 ? formatVoiceTime(duration) : '0:00');
+      }
+
+      const bars = card.querySelectorAll('.voice-bar');
+      const activeCount = Math.round(pct * bars.length);
+      bars.forEach((b, idx) => {
+        b.classList.toggle('played', isCurrent && idx < activeCount);
+      });
+    });
+  }
+
+  function stopVoicePlayback() {
+    if (voicePlayerState.rafId) {
+      cancelAnimationFrame(voicePlayerState.rafId);
+      voicePlayerState.rafId = null;
+    }
+    if (voicePlayerState.audio) {
+      try { voicePlayerState.audio.pause(); } catch { }
+    }
+    const prevId = voicePlayerState.msgId;
+    voicePlayerState.msgId = null;
+    voicePlayerState.url = null;
+    if (prevId) syncVoicePlayerDom(prevId);
+  }
+
+  function ensureVoiceAudioElement() {
+    if (voicePlayerState.audio) return voicePlayerState.audio;
+    const audio = new Audio();
+    audio.preload = 'metadata';
+    const step = () => {
+      if (!voicePlayerState.audio || voicePlayerState.audio.paused || voicePlayerState.audio.ended) {
+        voicePlayerState.rafId = null;
+        syncVoicePlayerDom();
+        return;
+      }
+      syncVoicePlayerDom();
+      voicePlayerState.rafId = requestAnimationFrame(step);
+    };
+    audio.addEventListener('play', () => {
+      syncVoicePlayerDom();
+      if (!voicePlayerState.rafId) voicePlayerState.rafId = requestAnimationFrame(step);
+    });
+    audio.addEventListener('pause', () => {
+      if (voicePlayerState.rafId) {
+        cancelAnimationFrame(voicePlayerState.rafId);
+        voicePlayerState.rafId = null;
+      }
+      syncVoicePlayerDom();
+    });
+    audio.addEventListener('loadedmetadata', () => {
+      if (voicePlayerState.msgId && Number.isFinite(audio.duration) && audio.duration > 0) {
+        const card = document.querySelector(`.voice-player[data-voice-msg="${CSS && CSS.escape ? CSS.escape(voicePlayerState.msgId) : voicePlayerState.msgId}"]`);
+        if (card) card.dataset.voiceDuration = String(Math.round(audio.duration));
+      }
+      syncVoicePlayerDom();
+    });
+    audio.addEventListener('ended', () => {
+      if (voicePlayerState.rafId) {
+        cancelAnimationFrame(voicePlayerState.rafId);
+        voicePlayerState.rafId = null;
+      }
+      audio.currentTime = 0;
+      voicePlayerState.msgId = null;
+      syncVoicePlayerDom();
+    });
+    audio.addEventListener('error', () => {
+      showToast('Could not play voice message.', 'error');
+      stopVoicePlayback();
+    });
+    voicePlayerState.audio = audio;
+    return audio;
+  }
+
+  async function toggleVoiceMessagePlay(msgId, url) {
+    if (!url || typeof Audio === 'undefined') return;
+    const audio = ensureVoiceAudioElement();
+    if (voicePlayerState.msgId === msgId && voicePlayerState.url === url) {
+      if (audio.paused) {
+        audio.playbackRate = VOICE_SPEEDS[voicePlayerState.speedIdx] || 1;
+        await audio.play().catch(() => {});
+      } else {
+        audio.pause();
+      }
+      return;
+    }
+    voicePlayerState.msgId = msgId;
+    voicePlayerState.url = url;
+    audio.src = url;
+    audio.playbackRate = VOICE_SPEEDS[voicePlayerState.speedIdx] || 1;
+    await audio.play().catch(() => {});
+    syncVoicePlayerDom();
+  }
+
+  function seekVoiceMessage(msgId, url, fraction) {
+    const f = Math.max(0, Math.min(1, Number(fraction) || 0));
+    const audio = ensureVoiceAudioElement();
+    if (voicePlayerState.msgId !== msgId || voicePlayerState.url !== url) {
+      voicePlayerState.msgId = msgId;
+      voicePlayerState.url = url;
+      audio.src = url;
+      audio.playbackRate = VOICE_SPEEDS[voicePlayerState.speedIdx] || 1;
+      audio.addEventListener('loadedmetadata', () => {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          audio.currentTime = f * audio.duration;
+        }
+      }, { once: true });
+      audio.play().catch(() => {});
+      syncVoicePlayerDom();
+      return;
+    }
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      audio.currentTime = f * audio.duration;
+      syncVoicePlayerDom();
+    }
+  }
+
+  function cycleVoicePlaybackSpeed(msgId, url) {
+    voicePlayerState.speedIdx = (voicePlayerState.speedIdx + 1) % VOICE_SPEEDS.length;
+    const rate = VOICE_SPEEDS[voicePlayerState.speedIdx] || 1;
+    if (voicePlayerState.audio) {
+      voicePlayerState.audio.playbackRate = rate;
+    }
+    if (voicePlayerState.msgId !== msgId && url) {
+      toggleVoiceMessagePlay(msgId, url);
+    } else {
+      syncVoicePlayerDom();
+    }
+  }
+
   function renderAttachmentsHtml(msg) {
     if (!Array.isArray(msg.attachments) || msg.attachments.length === 0) return '';
     const isRichStickerOrGif = !msg.text && msg.attachments.length === 1 && msg.attachments[0].isImage && (msg.kind === 'sticker' || msg.kind === 'gif' || msg.attachments[0].mimeType === 'image/gif');
@@ -2422,12 +2753,29 @@
         return `<video class="msg-media-player" controls preload="metadata" src="${escapeHtml(att.url)}"></video>`;
       }
       if (att.mimeType && att.mimeType.startsWith('audio/')) {
-        const isVoice = /^voice-.*\.(webm|ogg|mp4|m4a|wav)$/i.test(String(att.originalName || ''));
+        const isVoice = /^voice-.*\.(webm|ogg|mp4|m4a|wav)$/i.test(String(att.originalName || '')) || Boolean(msg.voiceMeta);
         if (isVoice) {
+          const peaks = getVoicePeaks(msg, att);
+          const totalSec = msg.voiceMeta && msg.voiceMeta.durationSec ? Number(msg.voiceMeta.durationSec) : 0;
+          const isCurrent = voicePlayerState.msgId === msg.id;
+          const isPlaying = isCurrent && voicePlayerState.audio && !voicePlayerState.audio.paused;
+          const curRate = VOICE_SPEEDS[voicePlayerState.speedIdx] || 1;
+          const barsHtml = peaks.map((h) => `<span class="voice-bar" style="height:${Math.max(14, Math.min(100, h))}%"></span>`).join('');
           return `
-            <div class="voice-note-card">
-              <div class="voice-note-label">🎤 Voice message</div>
-              <audio class="msg-media-player" controls preload="metadata" src="${escapeHtml(att.url)}"></audio>
+            <div class="voice-player${isPlaying ? ' is-playing' : ''}" data-voice-msg="${escapeHtml(msg.id)}" data-voice-url="${escapeHtml(att.url)}" data-voice-duration="${totalSec}">
+              <button type="button" class="voice-play-btn" data-voice-toggle="${escapeHtml(msg.id)}" aria-label="Play voice message">
+                <svg class="voice-icon-play" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><polygon points="7 4 20 12 7 20 7 4"/></svg>
+                <svg class="voice-icon-pause" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+              </button>
+              <div class="voice-wave-body">
+                <div class="voice-wave-track" data-voice-seek="${escapeHtml(msg.id)}" role="slider" aria-label="Voice progress" tabindex="0">
+                  ${barsHtml}
+                </div>
+                <div class="voice-meta-row">
+                  <span class="voice-time">${totalSec > 0 ? formatVoiceTime(totalSec) : '0:00'}</span>
+                  <button type="button" class="voice-speed-btn${isCurrent && curRate !== 1 ? ' boosted' : ''}" data-voice-speed="${escapeHtml(msg.id)}" title="Playback speed">${isCurrent ? `${curRate}x` : '1x'}</button>
+                </div>
+              </div>
             </div>
           `;
         }
@@ -2795,6 +3143,15 @@
         }
       }
 
+      let pollCardHtml = '';
+      if (msg.kind === 'poll' && msg.poll) {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.renderPollBubbleHtml === 'function') {
+          pollCardHtml = window.VibeRoomFeatures.renderPollBubbleHtml(msg);
+        } else {
+          pollCardHtml = `<div class="poll-card-fallback">📊 ${escapeHtml(msg.poll.question || 'Poll')}</div>`;
+        }
+      }
+
       const isSelected = state.selectMode && state.selectedMsgIds.has(msg.id);
       const fwdHeaderHtml = msg.forwardedFrom && msg.forwardedFrom.sender
         ? `<div class="msg-forwarded-header">↪ Forwarded from @${escapeHtml(msg.forwardedFrom.sender)}</div>`
@@ -2802,12 +3159,15 @@
       const editedBadgeHtml = msg.editedAt
         ? `<span class="msg-edited-badge" title="Edited ${escapeHtml(formatTime(msg.editedAt))}">edited</span>`
         : '';
+      const ttlBadgeHtml = msg.expiresAt
+        ? `<span class="msg-ttl-badge" data-expires-at="${escapeHtml(msg.expiresAt)}" title="Self-destruct timer">⏱ ${escapeHtml(formatTtlFromIso(msg.expiresAt))}</span>`
+        : '';
       const selectCheckHtml = state.selectMode
         ? `<span class="msg-select-check">${isSelected ? '✓' : ''}</span>`
         : '';
 
       let stickerCardHtml = '';
-      if (msg.sticker) {
+      if (msg.sticker && !msg.viewOnce) {
         if (window.VibeRoomStickers && typeof window.VibeRoomStickers.renderBubbleHtml === 'function') {
           stickerCardHtml = window.VibeRoomStickers.renderBubbleHtml(msg.sticker);
         } else {
@@ -2815,24 +3175,67 @@
         }
       }
 
+      let viewOnceCardHtml = '';
+      if (msg.viewOnce) {
+        const hint = msg.viewOnceHint || {};
+        const typeLabel = hint.isVoice
+          ? 'Voice Note'
+          : (hint.hasImage ? 'Photo' : (hint.isVideo ? 'Video' : (hint.hasFile ? 'File' : 'Secret Message')));
+        if (msg.consumed || msg.viewOnceState === 'consumed') {
+          viewOnceCardHtml = `
+            <div class="view-once-card is-consumed">
+              <span class="view-once-icon">🔥</span>
+              <span class="view-once-label">Opened • Self-destructed</span>
+            </div>
+          `;
+        } else if (!isMine && msg.viewOnceState !== 'sent') {
+          viewOnceCardHtml = `
+            <button type="button" class="view-once-card is-sealed" data-open-view-once="${escapeHtml(msg.id)}">
+              <span class="view-once-badge">1×</span>
+              <div class="view-once-meta">
+                <strong>View-Once ${escapeHtml(typeLabel)}</strong>
+                <span>Tap to reveal once</span>
+              </div>
+            </button>
+          `;
+        } else {
+          const opened = Array.isArray(msg.viewedBy) && msg.viewedBy.length > 0;
+          viewOnceCardHtml = `
+            <div class="view-once-card is-sent">
+              <span class="view-once-badge">1×</span>
+              <div class="view-once-meta">
+                <strong>View-Once ${escapeHtml(typeLabel)}</strong>
+                <span>${opened ? 'Opened by recipient' : 'Waiting to be opened'}</span>
+              </div>
+            </div>
+          `;
+        }
+      }
+
       const isMediaStickerBubble = Boolean(
+        !msg.viewOnce &&
         !msg.text &&
         (stickerCardHtml || (msg.attachments && msg.attachments.length === 1 && msg.attachments[0].isImage && (msg.kind === 'sticker' || msg.kind === 'gif' || msg.attachments[0].mimeType === 'image/gif')))
       );
 
+      const showBodyText = Boolean(!msg.viewOnce && msg.text && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'poll');
       const bubbleHtml = `
         <div class="msg-bubble${isMediaStickerBubble ? ' sticker-bubble' : ''}">
           ${fwdHeaderHtml}
           ${senderHeaderHtml}
           ${replyHtml}
-          ${stickerCardHtml}
-          ${renderAttachmentsHtml(msg)}
-          ${gameCardHtml}
-          ${callCardHtml}
-          ${msg.text && msg.kind !== 'game' && msg.kind !== 'call' ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
-          ${renderLinkPreviewHtml(msg)}
+          ${msg.viewOnce ? viewOnceCardHtml : `
+            ${stickerCardHtml}
+            ${renderAttachmentsHtml(msg)}
+            ${gameCardHtml}
+            ${callCardHtml}
+            ${pollCardHtml}
+            ${showBodyText ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
+            ${renderLinkPreviewHtml(msg)}
+          `}
           ${renderReactionsHtml(msg)}
           <div class="msg-footer">
+            ${ttlBadgeHtml}
             ${editedBadgeHtml}
             <span>${escapeHtml(formatTime(msg.createdAt))}</span>
             ${ticksHtml}
@@ -2843,7 +3246,7 @@
       const baseClassName = `msg-row ${groupClasses}${state.selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}`;
       const timeLabel = formatTime(msg.createdAt);
       const metaSig = `${baseClassName}|${timeLabel}|${isMediaStickerBubble ? '1' : '0'}`;
-      const mediaSig = JSON.stringify([msg.kind || '', msg.sticker || null, msg.attachments || null]);
+      const mediaSig = JSON.stringify([msg.kind || '', msg.sticker || null, msg.attachments || null, msg.voiceMeta || null, msg.viewOnce ? (msg.consumed ? '2' : (msg.viewOnceState || '1')) : '0']);
       const contentSig = JSON.stringify([
         msg.text || '',
         msg.editedAt || '',
@@ -2852,6 +3255,11 @@
         msg.linkPreview || null,
         msg.game || null,
         msg.call || null,
+        msg.poll || null,
+        msg.viewOnce || false,
+        msg.consumed || false,
+        msg.viewedBy || null,
+        msg.expiresAt || '',
         senderHeaderHtml
       ]);
       const reactionsSig = JSON.stringify(msg.reactions || null);
@@ -3140,11 +3548,14 @@
 
     try {
       sendTypingSignal(false);
+      const { viewOnce, ttlSeconds } = getComposeTimerPayload();
       let data;
       if (hasFiles) {
         const fd = new FormData();
         fd.append('text', text);
         if (replyToId) fd.append('replyToId', replyToId);
+        if (ttlSeconds > 0) fd.append('ttlSeconds', String(ttlSeconds));
+        if (viewOnce) fd.append('viewOnce', '1');
         for (const item of state.pendingFiles) {
           fd.append('files', item.file, item.file.name);
         }
@@ -3152,12 +3563,16 @@
       } else {
         data = await api(`/api/chats/${encodeURIComponent(chatId)}/messages`, {
           method: 'POST',
-          body: { text, replyToId }
+          body: { text, replyToId, ttlSeconds, viewOnce }
         });
       }
 
       clearPendingFiles();
       clearReply();
+      if (viewOnce) {
+        state.composeTimerMode = 'off';
+        syncComposerTimerUi();
+      }
 
       // Add message optimistically if SSE hasn't delivered it yet
       if (data.message && !state.messages.some((m) => m.id === data.message.id)) {
@@ -4371,10 +4786,17 @@
       const fd = new FormData();
       fd.append('text', '');
       fd.append('kind', kind);
+      const { viewOnce, ttlSeconds } = getComposeTimerPayload();
+      if (ttlSeconds > 0) fd.append('ttlSeconds', String(ttlSeconds));
+      if (viewOnce) fd.append('viewOnce', '1');
       if (replyToId) fd.append('replyToId', replyToId);
       fd.append('files', file, file.name || (isGif ? `keyboard-${Date.now()}.gif` : `sticker-${Date.now()}.png`));
       const data = await sendWithProgress(`/api/chats/${encodeURIComponent(chatId)}/messages`, fd);
       clearReply();
+      if (viewOnce) {
+        state.composeTimerMode = 'off';
+        syncComposerTimerUi();
+      }
       if (data.message && !state.messages.some((m) => m.id === data.message.id)) {
         state.messages.push(data.message);
         renderMessages(true);
@@ -4860,6 +5282,7 @@
         if (hasAndroidBridge) {
           state.prefs.notifications = true;
           savePrefs();
+          syncAndroidFcmToken();
         } else {
           const granted = await requestBrowserNotificationPermission();
           if (!granted) els.prefNotifications.checked = false;
@@ -4867,6 +5290,7 @@
       } else {
         state.prefs.notifications = false;
         savePrefs();
+        if (!hasAndroidBridge) unsubscribeWebPush();
       }
       syncSettingsUI();
     });
@@ -4879,9 +5303,11 @@
     els.testNotifBtn.addEventListener('click', async () => {
       const hasAndroidBridge = Boolean(window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
       if (hasAndroidBridge) {
+        await syncAndroidFcmToken();
+        api('/api/push/test', { method: 'POST' }).catch(() => {});
         window.AndroidBridge.showNotification(
           state.me ? (state.me.displayName || state.me.username) : 'VibeRoom Test',
-          'Android notifications with profile photo are working!',
+          'Android notifications & push alerts are working!',
           state.activeChatId || '',
           `test_${Date.now()}`,
           state.me ? (state.me.avatarUrl || '') : '',
@@ -4893,6 +5319,12 @@
       const ok = await requestBrowserNotificationPermission();
       if (!ok) return;
       try {
+        await ensureWebPushSubscribed();
+        const pushRes = await api('/api/push/test', { method: 'POST' }).catch(() => null);
+        if (pushRes && pushRes.webSent > 0) {
+          showToast('Background Web Push test sent!', 'success');
+          return;
+        }
         const opts = { body: 'Browser notifications are working!', icon: '/icon-192.png', tag: 'viberoom-test' };
         if (swRegistration && typeof swRegistration.showNotification === 'function') {
           await swRegistration.showNotification('VibeRoom Test', opts);
@@ -5467,6 +5899,14 @@
         if (navigator && typeof navigator.vibrate === 'function') {
           try { navigator.vibrate(14); } catch { }
         }
+        if (els.msgTimerPopover && !els.msgTimerPopover.classList.contains('hidden')) {
+          els.msgTimerPopover.classList.add('hidden');
+          return;
+        }
+        if (els.viewOnceModal && !els.viewOnceModal.classList.contains('hidden')) {
+          closeAndBurnViewOnceModal();
+          return;
+        }
         if (state.chatSelectMode) {
           toggleChatSelected(chatId);
         } else {
@@ -5789,7 +6229,7 @@
         }
       ];
 
-      if (isMine && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'sticker' && msg.kind !== 'gif' && !msg.sticker) {
+      if (isMine && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'sticker' && msg.kind !== 'gif' && msg.kind !== 'poll' && !msg.sticker && !msg.viewOnce) {
         items.push({
           action: 'edit',
           label: 'Edit',
@@ -5797,7 +6237,7 @@
         });
       }
 
-      if (!isChannelReadOnly && msg.kind !== 'game' && msg.kind !== 'call') {
+      if (!isChannelReadOnly && msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce) {
         items.push({
           action: isCurrentlyPinned ? 'unpin' : 'pin',
           label: isCurrentlyPinned ? 'Unpin' : 'Pin',
@@ -5805,7 +6245,7 @@
         });
       }
 
-      if (msg.text) {
+      if (msg.text && !msg.viewOnce) {
         items.push({
           action: 'copy',
           label: 'Copy',
@@ -5813,7 +6253,7 @@
         });
       }
 
-      if (msg.kind !== 'game' && msg.kind !== 'call') {
+      if (msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce) {
         items.push({
           action: 'forward',
           label: 'Forward',
@@ -5970,6 +6410,74 @@
         return;
       }
 
+      const voiceToggleBtn = e.target.closest('[data-voice-toggle]');
+      if (voiceToggleBtn) {
+        e.stopPropagation();
+        const card = voiceToggleBtn.closest('.voice-player');
+        if (card) {
+          await toggleVoiceMessagePlay(card.dataset.voiceMsg, card.dataset.voiceUrl);
+        }
+        return;
+      }
+
+      const voiceSpeedBtn = e.target.closest('[data-voice-speed]');
+      if (voiceSpeedBtn) {
+        e.stopPropagation();
+        const card = voiceSpeedBtn.closest('.voice-player');
+        if (card) {
+          cycleVoicePlaybackSpeed(card.dataset.voiceMsg, card.dataset.voiceUrl);
+        }
+        return;
+      }
+
+      const voiceSeekTrack = e.target.closest('[data-voice-seek]');
+      if (voiceSeekTrack && typeof voiceSeekTrack.getBoundingClientRect === 'function') {
+        e.stopPropagation();
+        const card = voiceSeekTrack.closest('.voice-player');
+        const rect = voiceSeekTrack.getBoundingClientRect();
+        if (card && rect.width > 0) {
+          const frac = (e.clientX - rect.left) / rect.width;
+          seekVoiceMessage(card.dataset.voiceMsg, card.dataset.voiceUrl, frac);
+        }
+        return;
+      }
+
+      const viewOnceBtn = e.target.closest('[data-open-view-once]');
+      if (viewOnceBtn && state.activeChatId) {
+        e.stopPropagation();
+        await openViewOnceById(viewOnceBtn.dataset.openViewOnce);
+        return;
+      }
+
+      const pollVoteBtn = e.target.closest('[data-poll-vote]');
+      if (pollVoteBtn && state.activeChatId) {
+        e.stopPropagation();
+        const pollId = pollVoteBtn.dataset.pollId;
+        const optIdx = Number(pollVoteBtn.dataset.pollVote);
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.votePollOption === 'function') {
+          await window.VibeRoomFeatures.votePollOption(state.activeChatId, pollId, optIdx);
+        }
+        return;
+      }
+
+      const pollCloseBtn = e.target.closest('[data-poll-close]');
+      if (pollCloseBtn && state.activeChatId) {
+        e.stopPropagation();
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.closePollById === 'function') {
+          await window.VibeRoomFeatures.closePollById(state.activeChatId, pollCloseBtn.dataset.pollClose);
+        }
+        return;
+      }
+
+      const rematchBtn = e.target.closest('[data-rematch-game]');
+      if (rematchBtn && state.activeChatId) {
+        e.stopPropagation();
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.rematchGame === 'function') {
+          await window.VibeRoomFeatures.rematchGame(rematchBtn.dataset.rematchGame);
+        }
+        return;
+      }
+
       const cancelGameBtn = e.target.closest('[data-cancel-game]');
       if (cancelGameBtn && state.activeChatId) {
         e.stopPropagation();
@@ -6007,7 +6515,7 @@
 
       // On desktop websites (fine pointer, non-Android), left-clicking a message bubble opens the action + reaction menu
       if (!isMobileTouchMode() && e.button === 0 && e.currentTarget === els.messagesList) {
-        if (e.target.closest('a, button, video, audio, .msg-actions, .game-card-msg, .call-log-msg, .mention-tag')) return;
+        if (e.target.closest('a, button, video, audio, .voice-player, .poll-card, .view-once-card, .msg-actions, .game-card-msg, .call-log-msg, .mention-tag')) return;
         const selected = typeof window.getSelection === 'function' ? String(window.getSelection() || '').trim() : '';
         if (selected.length > 0) return;
         const bubble = e.target.closest('.msg-bubble');
@@ -6250,11 +6758,148 @@
       });
     }
 
-    // Voice Note Recorder (hold-to-record OR tap-to-record + timer bar)
+    if (els.openPollBtn) {
+      els.openPollBtn.addEventListener('click', () => {
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.openPollModal === 'function') {
+          window.VibeRoomFeatures.openPollModal();
+        }
+      });
+    }
+
+    if (els.msgTimerBtn && els.msgTimerPopover) {
+      els.msgTimerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        els.msgTimerPopover.classList.toggle('hidden');
+      });
+      els.msgTimerPopover.addEventListener('click', (e) => {
+        const opt = e.target.closest('[data-timer-mode]');
+        if (!opt) return;
+        state.composeTimerMode = opt.dataset.timerMode || 'off';
+        syncComposerTimerUi();
+        els.msgTimerPopover.classList.add('hidden');
+        if (state.composeTimerMode === 'viewOnce') {
+          showToast('View-Once enabled for next message', 'info');
+        } else if (state.composeTimerMode !== 'off') {
+          showToast(`Self-destruct timer: ${formatTtlShort(Number(state.composeTimerMode))}`, 'info');
+        }
+      });
+      document.addEventListener('click', (e) => {
+        if (!els.msgTimerPopover.classList.contains('hidden') && !e.target.closest('.msg-timer-anchor')) {
+          els.msgTimerPopover.classList.add('hidden');
+        }
+      });
+    }
+
+    let activeViewOnceContext = null;
+    async function closeAndBurnViewOnceModal() {
+      if (els.viewOnceModal) els.viewOnceModal.classList.add('hidden');
+      if (els.viewOnceBody) els.viewOnceBody.innerHTML = '';
+      const ctx = activeViewOnceContext;
+      activeViewOnceContext = null;
+      if (ctx && !ctx.alreadyBurned && ctx.chatId && ctx.msgId) {
+        try {
+          const res = await api(`/api/chats/${encodeURIComponent(ctx.chatId)}/messages/${encodeURIComponent(ctx.msgId)}/view-once/burn`, {
+            method: 'POST'
+          });
+          if (res.message && state.activeChatId === ctx.chatId) {
+            const idx = state.messages.findIndex((m) => m.id === res.message.id);
+            if (idx >= 0) {
+              state.messages[idx] = res.message;
+              renderMessages(false);
+            }
+          }
+        } catch {
+          // Already burned
+        }
+      }
+    }
+
+    async function openViewOnceById(msgId) {
+      if (!state.activeChatId || !msgId) return;
+      const chatId = state.activeChatId;
+      try {
+        const res = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/view-once`, {
+          method: 'POST'
+        });
+        const revealed = res.message;
+        if (!revealed || !els.viewOnceModal || !els.viewOnceBody) return;
+        activeViewOnceContext = { chatId, msgId, alreadyBurned: Boolean(res.consumed) };
+
+        const parts = [];
+        if (Array.isArray(revealed.attachments)) {
+          for (const att of revealed.attachments) {
+            if (att.isImage) {
+              parts.push(`<img class="view-once-media" src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" />`);
+            } else if (att.mimeType && att.mimeType.startsWith('video/')) {
+              parts.push(`<video class="view-once-media" controls autoplay src="${escapeHtml(att.url)}"></video>`);
+            } else if (att.mimeType && att.mimeType.startsWith('audio/')) {
+              parts.push(`<audio class="view-once-audio" controls autoplay src="${escapeHtml(att.url)}"></audio>`);
+            } else {
+              parts.push(`<a class="secondary-btn" href="${escapeHtml(att.url)}&download=1" download="${escapeHtml(att.originalName)}">⬇ ${escapeHtml(att.originalName)}</a>`);
+            }
+          }
+        }
+        if (revealed.text) {
+          parts.push(`<div class="view-once-text">${linkifyText(revealed.text)}</div>`);
+        }
+        els.viewOnceBody.innerHTML = parts.join('') || '<div class="vr-hint">Empty View-Once content</div>';
+        els.viewOnceModal.classList.remove('hidden');
+
+        if (res.consumed) {
+          const idx = state.messages.findIndex((m) => m.id === msgId);
+          if (idx >= 0) {
+            state.messages[idx] = { ...state.messages[idx], consumed: true, viewOnceState: 'consumed' };
+            renderMessages(false);
+          }
+        }
+      } catch (err) {
+        showToast(err.message || 'Unable to reveal View-Once message.', 'error');
+      }
+    }
+
+    if (els.viewOnceBackdrop) els.viewOnceBackdrop.addEventListener('click', closeAndBurnViewOnceModal);
+    if (els.viewOnceClose) els.viewOnceClose.addEventListener('click', closeAndBurnViewOnceModal);
+    if (els.viewOnceDoneBtn) els.viewOnceDoneBtn.addEventListener('click', closeAndBurnViewOnceModal);
+
+    // Voice Note Recorder (hold-to-record OR tap-to-record + live waveform sampling)
     let voiceRecState = null;
+    function renderRecLiveWave(levelPct = 18) {
+      if (!els.voiceRecWave) return;
+      if (els.voiceRecWave.children.length === 0) {
+        els.voiceRecWave.innerHTML = Array.from({ length: 18 }, () => '<span class="voice-rec-bar-item" style="height:20%"></span>').join('');
+      }
+      const bars = Array.from(els.voiceRecWave.children);
+      for (let i = 0; i < bars.length - 1; i++) {
+        bars[i].style.height = bars[i + 1].style.height || '20%';
+      }
+      if (bars.length > 0) {
+        bars[bars.length - 1].style.height = `${Math.max(14, Math.min(100, Math.round(levelPct)))}%`;
+      }
+    }
+
+    function downsamplePeaks(samples, count = 28) {
+      if (!Array.isArray(samples) || samples.length === 0) return null;
+      const out = [];
+      const step = samples.length / count;
+      for (let i = 0; i < count; i++) {
+        const start = Math.floor(i * step);
+        const end = Math.max(start + 1, Math.floor((i + 1) * step));
+        let maxVal = 0;
+        for (let k = start; k < end && k < samples.length; k++) {
+          if (samples[k] > maxVal) maxVal = samples[k];
+        }
+        out.push(Math.max(12, Math.min(100, Math.round(maxVal))));
+      }
+      return out;
+    }
+
     function cleanupVoiceRecorderUI() {
       if (voiceRecState) {
         if (voiceRecState.timer) clearInterval(voiceRecState.timer);
+        if (voiceRecState.meterTimer) clearInterval(voiceRecState.meterTimer);
+        if (voiceRecState.audioCtx && typeof voiceRecState.audioCtx.close === 'function') {
+          try { voiceRecState.audioCtx.close(); } catch { }
+        }
         if (voiceRecState.stream) {
           try { voiceRecState.stream.getTracks().forEach((t) => t.stop()); } catch { }
         }
@@ -6262,19 +6907,28 @@
       voiceRecState = null;
       if (els.voiceRecBar) els.voiceRecBar.classList.add('hidden');
       if (els.voiceRecBtn) els.voiceRecBtn.classList.remove('recording');
+      if (els.voiceRecWave) els.voiceRecWave.innerHTML = '';
     }
 
-    async function sendVoiceAudioBlob(blob, mimeType) {
+    async function sendVoiceAudioBlob(blob, mimeType, voiceMeta = null) {
       if (!state.activeChatId || !blob || blob.size < 400) return;
       const chatId = state.activeChatId;
       const ext = mimeType.includes('ogg') ? 'ogg' : (mimeType.includes('mp4') ? 'm4a' : 'webm');
       const fd = new FormData();
       fd.append('text', '');
       if (state.replyTo && state.replyTo.id) fd.append('replyToId', state.replyTo.id);
+      if (voiceMeta) fd.append('voiceMeta', JSON.stringify(voiceMeta));
+      const { viewOnce, ttlSeconds } = getComposeTimerPayload();
+      if (ttlSeconds > 0) fd.append('ttlSeconds', String(ttlSeconds));
+      if (viewOnce) fd.append('viewOnce', '1');
       fd.append('files', blob, `voice-${Date.now()}.${ext}`);
       try {
         const data = await sendWithProgress(`/api/chats/${encodeURIComponent(chatId)}/messages`, fd);
         clearReply();
+        if (viewOnce) {
+          state.composeTimerMode = 'off';
+          syncComposerTimerUi();
+        }
         if (data.message && !state.messages.some((m) => m.id === data.message.id)) {
           state.messages.push(data.message);
           renderMessages(true);
@@ -6304,13 +6958,54 @@
         return;
       }
       try {
+        stopVoicePlayback();
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const mimeOptions = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
         const chosenMime = mimeOptions.find((m) => typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(m)) || '';
         const recorder = chosenMime ? new MediaRecorder(stream, { mimeType: chosenMime }) : new MediaRecorder(stream);
         const chunks = [];
+        const samples = [];
         const startedAt = Date.now();
-        voiceRecState = { recorder, stream, chunks, startedAt, timer: null, shouldSend: false, mimeType: chosenMime || 'audio/webm' };
+        voiceRecState = {
+          recorder,
+          stream,
+          chunks,
+          samples,
+          startedAt,
+          timer: null,
+          meterTimer: null,
+          audioCtx: null,
+          shouldSend: false,
+          mimeType: chosenMime || 'audio/webm'
+        };
+
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          try {
+            const ctx = new AudioCtx();
+            const src = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 128;
+            src.connect(analyser);
+            const dataArr = new Uint8Array(analyser.frequencyBinCount);
+            voiceRecState.audioCtx = ctx;
+            voiceRecState.meterTimer = setInterval(() => {
+              if (!voiceRecState) return;
+              analyser.getByteTimeDomainData(dataArr);
+              let sumSq = 0;
+              for (let i = 0; i < dataArr.length; i++) {
+                const v = (dataArr[i] - 128) / 128;
+                sumSq += v * v;
+              }
+              const rms = Math.sqrt(sumSq / dataArr.length);
+              const pct = Math.max(14, Math.min(100, Math.round(14 + rms * 340)));
+              samples.push(pct);
+              renderRecLiveWave(pct);
+            }, 80);
+          } catch {
+            // Optional live waveform analyser fallback
+          }
+        }
 
         recorder.ondataavailable = (ev) => {
           if (ev.data && ev.data.size > 0) chunks.push(ev.data);
@@ -6319,10 +7014,12 @@
           const cur = voiceRecState;
           const doSend = cur && cur.shouldSend;
           const type = (cur && cur.mimeType) || 'audio/webm';
+          const durationSec = cur ? Math.max(1, Math.round((Date.now() - cur.startedAt) / 1000)) : 1;
+          const peaks = cur ? downsamplePeaks(cur.samples, 28) : null;
           const blob = new Blob(chunks, { type });
           cleanupVoiceRecorderUI();
           if (doSend) {
-            await sendVoiceAudioBlob(blob, type);
+            await sendVoiceAudioBlob(blob, type, { durationSec, peaks: peaks || undefined });
           }
         };
 
@@ -6710,6 +7407,14 @@
           closeChatContextMenu();
           return;
         }
+        if (els.msgTimerPopover && !els.msgTimerPopover.classList.contains('hidden')) {
+          els.msgTimerPopover.classList.add('hidden');
+          return;
+        }
+        if (els.viewOnceModal && !els.viewOnceModal.classList.contains('hidden')) {
+          closeAndBurnViewOnceModal();
+          return;
+        }
         if (state.chatSelectMode) {
           exitChatSelectMode();
           return;
@@ -6749,6 +7454,8 @@
     updateAppUpdateUI();
     syncAndroidState(true);
     connectRealtime();
+    ensureWebPushSubscribed();
+    syncAndroidFcmToken();
     await Promise.all([refreshChats(), refreshFriends(), refreshBlockedUsers()]);
     if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.onAuthenticated === 'function') {
       await window.VibeRoomFeatures.onAuthenticated(user);
@@ -6757,6 +7464,11 @@
       const queued = state.queuedAndroidShare;
       state.queuedAndroidShare = null;
       handleIncomingAndroidShare(queued);
+    }
+    if (state.pendingDeepLinkChatId) {
+      const targetChatId = state.pendingDeepLinkChatId;
+      state.pendingDeepLinkChatId = null;
+      await openChatByIdOrSender(targetChatId, null);
     }
     if (state.pendingProfileLinkUser) {
       const targetHandle = state.pendingProfileLinkUser;
@@ -6781,6 +7493,30 @@
     };
 
     syncViewport();
+    if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+      setInterval(() => {
+        if (!state.activeChatId || !Array.isArray(state.messages) || state.messages.length === 0) return;
+        const now = Date.now();
+        let removedAny = false;
+        const remaining = [];
+        for (const m of state.messages) {
+          if (m && m.expiresAt && new Date(m.expiresAt).getTime() <= now) {
+            removedAny = true;
+          } else {
+            remaining.push(m);
+          }
+        }
+        if (removedAny) {
+          state.messages = remaining;
+          renderMessages(false);
+          refreshChats();
+          return;
+        }
+        document.querySelectorAll('.msg-ttl-badge[data-expires-at]').forEach((badge) => {
+          badge.textContent = `⏱ ${formatTtlFromIso(badge.dataset.expiresAt)}`;
+        });
+      }, 1000);
+    }
     if (typeof window.addEventListener === 'function') {
       window.addEventListener('resize', syncViewport);
     }
@@ -6812,6 +7548,7 @@
   // Expose clean hooks for the Android WebView wrapper
   window.__telechatSyncState = (isFg) => syncAndroidState(isFg);
   window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
+  window.__telechatOnFcmToken = (token) => syncAndroidFcmToken(token);
   window.__telechatOnUpdateStatus = (info) => updateAppUpdateUI(info);
   window.__telechatReceiveShare = (payload) => handleIncomingAndroidShare(payload);
   window.__telechatReceiveKeyboardMedia = (payload) => handleIncomingKeyboardMedia(payload);
@@ -6823,6 +7560,7 @@
     if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.handleEscape === 'function') {
       if (window.VibeRoomFeatures.handleEscape()) return true;
     }
+    if (els.viewOnceModal && !els.viewOnceModal.classList.contains('hidden')) { closeAndBurnViewOnceModal(); return true; }
     if (els.reportUserModal && !els.reportUserModal.classList.contains('hidden')) { closeReportModal(); return true; }
     if (els.userPreviewModal && !els.userPreviewModal.classList.contains('hidden')) { closeUserPreviewModal(); return true; }
     if (els.deleteConfirmModal && !els.deleteConfirmModal.classList.contains('hidden')) { closeDeleteConfirmModal(); return true; }
@@ -6903,14 +7641,24 @@
       try {
         const params = new URLSearchParams(window.location.search);
         const uParam = params.get('user');
+        const cParam = params.get('chatId');
+        if (cParam) {
+          state.pendingDeepLinkChatId = cParam.trim();
+        }
         if (uParam) {
           state.pendingProfileLinkUser = uParam.trim().replace(/^@+/, '').toLowerCase();
           if (window.history && typeof window.history.replaceState === 'function') {
             params.delete('user');
+            params.delete('chatId');
             const remaining = params.toString();
             const nextUrl = window.location.pathname + (remaining ? `?${remaining}` : '') + (window.location.hash || '');
             window.history.replaceState({}, '', nextUrl);
           }
+        } else if (cParam && window.history && typeof window.history.replaceState === 'function') {
+          params.delete('chatId');
+          const remaining = params.toString();
+          const nextUrl = window.location.pathname + (remaining ? `?${remaining}` : '') + (window.location.hash || '');
+          window.history.replaceState({}, '', nextUrl);
         }
       } catch { }
     }

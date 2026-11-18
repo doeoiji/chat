@@ -27,6 +27,7 @@
     // Games
     activeGameId: null,
     activeGameChatId: null,
+    gamesTab: 'play', // 'play' | 'leaderboard'
     chessSelectedSq: null,
     chessBusy: false,
 
@@ -975,6 +976,7 @@
         <div class="game-card-footer">
           <span class="game-card-cta">${g.status === 'active' ? 'Tap to play →' : (g.status === 'cancelled' ? 'Invite cancelled' : 'View board →')}</span>
           ${canCancel ? `<button type="button" class="game-cancel-btn" data-cancel-game="${esc(g.id)}">Cancel</button>` : ''}
+          ${g.status === 'finished' ? `<button type="button" class="game-rematch-btn" data-rematch-game="${esc(g.id)}">🔄 Rematch</button>` : ''}
         </div>
       </div>
     `;
@@ -1072,6 +1074,121 @@
     fState.chessSelectedSq = null;
   }
 
+  async function rematchGame(gameId) {
+    if (!core() || !gameId) return;
+    const game = findGameById(gameId);
+    const chatId = fState.activeGameChatId || core().getState().activeChatId;
+    if (!game || !chatId) return;
+    const me = getMyUsername();
+    const opponentUsername = Array.isArray(game.players) ? game.players.find((p) => p !== me) : undefined;
+    try {
+      const res = await core().api(`/api/chats/${encodeURIComponent(chatId)}/games`, {
+        method: 'POST',
+        body: { gameType: game.type, opponentUsername }
+      });
+      if (res.message && !core().getState().messages.some((m) => m.id === res.message.id)) {
+        core().getState().messages.push(res.message);
+        core().renderMessages(true);
+      }
+      fState.activeGameChatId = chatId;
+      fState.gamesTab = 'play';
+      fState.activeGameId = res.message && res.message.game ? res.message.game.id : null;
+      const modal = el('games-modal');
+      if (modal) {
+        renderGamesModal();
+        modal.classList.remove('hidden');
+      }
+      await core().refreshChats();
+      core().showToast(`Rematch started: ${game.title}!`, 'success');
+    } catch (err) {
+      core().showToast(err.message || 'Could not start rematch.', 'error');
+    }
+  }
+
+  async function renderLeaderboardTab(bodyEl) {
+    const state = core().getState();
+    const activePeerUsername = state.activePeer ? state.activePeer.username : '';
+    bodyEl.innerHTML = `
+      <div class="vr-stack">
+        <div class="vr-seg-tabs" role="tablist">
+          <button type="button" class="vr-seg-tab" data-games-tab="play">🎮 Play Games</button>
+          <button type="button" class="vr-seg-tab active" data-games-tab="leaderboard">🏆 Leaderboard &amp; Streaks</button>
+        </div>
+        <div class="vr-hint centered">Loading scoreboard &amp; win streaks...</div>
+      </div>
+    `;
+    try {
+      const data = await core().api('/api/games/leaderboard');
+      const s = data.myStats || {};
+      const rows = Array.isArray(data.leaderboard) ? data.leaderboard : [];
+      const h2h = activePeerUsername && s.vs ? s.vs[activePeerUsername] : null;
+      const byGame = s.byGame || {};
+      const gameBadges = [
+        { k: 'tictactoe', label: '⭕ TTT' },
+        { k: 'connect4', label: '🔴 Connect 4' },
+        { k: 'chess', label: '♟️ Chess' },
+        { k: 'wordguess', label: '🔤 Word Duel' }
+      ].map((g) => {
+        const gs = byGame[g.k] || { wins: 0, losses: 0, draws: 0 };
+        return `<span class="vr-stat-chip">${g.label}: <strong>${gs.wins}W</strong>-${gs.losses}L-${gs.draws}D</span>`;
+      }).join('');
+
+      bodyEl.innerHTML = `
+        <div class="vr-stack">
+          <div class="vr-seg-tabs" role="tablist">
+            <button type="button" class="vr-seg-tab" data-games-tab="play">🎮 Play Games</button>
+            <button type="button" class="vr-seg-tab active" data-games-tab="leaderboard">🏆 Leaderboard &amp; Streaks</button>
+          </div>
+
+          <div class="vr-stats-hero">
+            <div class="vr-stat-box">
+              <div class="vr-stat-num">${Number(s.wins || 0)}-${Number(s.losses || 0)}-${Number(s.draws || 0)}</div>
+              <div class="vr-stat-lbl">W - L - D</div>
+            </div>
+            <div class="vr-stat-box">
+              <div class="vr-stat-num">🔥 ${Number(s.currentStreak || 0)}</div>
+              <div class="vr-stat-lbl">Win Streak</div>
+            </div>
+            <div class="vr-stat-box">
+              <div class="vr-stat-num">🏅 ${Number(s.bestStreak || 0)}</div>
+              <div class="vr-stat-lbl">Best Streak</div>
+            </div>
+          </div>
+
+          <div class="vr-stat-chips-row">${gameBadges}</div>
+
+          ${h2h ? `
+            <div class="vr-h2h-card">
+              <span>⚔️ Rivalry vs <strong>@${esc(activePeerUsername)}</strong></span>
+              <span><strong>${h2h.wins || 0}W</strong> • ${h2h.losses || 0}L • ${h2h.draws || 0}D ${h2h.currentStreak > 0 ? `• 🔥${h2h.currentStreak}` : ''}</span>
+            </div>
+          ` : ''}
+
+          <div class="vr-room-section">
+            <div class="info-label">Friends Leaderboard (Win = 3 pts, Draw = 1 pt)</div>
+            ${rows.length === 0
+              ? '<div class="vr-hint centered">Play a game with friends to appear on the leaderboard!</div>'
+              : `<div class="vr-leaderboard-list">${rows.map((r, idx) => {
+                  const medal = idx === 0 ? '🥇' : (idx === 1 ? '🥈' : (idx === 2 ? '🥉' : `#${idx + 1}`));
+                  return `
+                    <div class="vr-lb-row ${r.isMe ? 'me' : ''}">
+                      <span class="vr-lb-rank">${medal}</span>
+                      <div class="vr-lb-info">
+                        <strong>${esc(r.displayName || r.username)} ${r.isMe ? '(You)' : ''}</strong>
+                        <span>${r.wins}W • ${r.losses}L • ${r.draws}D ${r.currentStreak > 1 ? `• 🔥 ${r.currentStreak} streak` : ''}</span>
+                      </div>
+                      <span class="vr-lb-pts">${r.score} pts</span>
+                    </div>
+                  `;
+                }).join('')}</div>`}
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      bodyEl.innerHTML = `<div class="vr-hint centered">${esc(err.message || 'Could not load leaderboard.')}</div>`;
+    }
+  }
+
   function renderGamesModal() {
     const titleEl = el('games-modal-title');
     const bodyEl = el('games-modal-body');
@@ -1088,6 +1205,18 @@
     }
 
     if (titleEl) titleEl.textContent = 'Chat Mini-Games';
+    if (fState.gamesTab === 'leaderboard') {
+      renderLeaderboardTab(bodyEl);
+      return;
+    }
+
+    const tabsHtml = `
+      <div class="vr-seg-tabs" role="tablist">
+        <button type="button" class="vr-seg-tab active" data-games-tab="play">🎮 Play Games</button>
+        <button type="button" class="vr-seg-tab" data-games-tab="leaderboard">🏆 Leaderboard &amp; Streaks</button>
+      </div>
+    `;
+
     const activeChatId = state.activeChatId;
     const existingGames = (state.messages || []).filter((m) => m.kind === 'game' && m.game).map((m) => m.game).reverse();
 
@@ -1097,6 +1226,7 @@
     if (!activeChatId) {
       bodyEl.innerHTML = `
         <div class="vr-stack">
+          ${tabsHtml}
           <p class="vr-hint">Pick a friend to challenge them to Tic-Tac-Toe, Connect 4, Chess, or Word Duel:</p>
           ${friendsList.length === 0
             ? '<div class="vr-hint centered">No friends added yet — search someone by exact @username or email in the sidebar and add them first!</div>'
@@ -1157,6 +1287,7 @@
 
     bodyEl.innerHTML = `
       <div class="vr-stack">
+        ${tabsHtml}
         ${isRoom && otherMembers.length > 0 ? `
           <div class="field-group">
             <label for="game-opponent-select">Challenge Friend</label>
@@ -1356,6 +1487,7 @@
           <div class="vr-inline-row">
             <span class="vr-hint">${esc(game.movesCount || 0)} moves</span>
             ${canCancel ? `<button type="button" class="game-cancel-btn" data-cancel-game="${esc(game.id)}">Cancel Game</button>` : ''}
+            ${game.status === 'finished' ? `<button type="button" class="primary-btn sm" data-rematch-game="${esc(game.id)}">🔄 Rematch</button>` : ''}
           </div>
         </div>
         ${statusBanner}
@@ -1380,6 +1512,17 @@
 
   async function handleGamesBodyClick(e) {
     if (!core()) return;
+    const tabBtn = e.target.closest('[data-games-tab]');
+    if (tabBtn) {
+      fState.gamesTab = tabBtn.dataset.gamesTab === 'leaderboard' ? 'leaderboard' : 'play';
+      renderGamesModal();
+      return;
+    }
+    const rematchBtn = e.target.closest('[data-rematch-game]');
+    if (rematchBtn) {
+      await rematchGame(rematchBtn.dataset.rematchGame);
+      return;
+    }
     const addFriendBtn = e.target.closest('[data-game-add-friend]');
     if (addFriendBtn && typeof core().performFriendAction === 'function') {
       await core().performFriendAction('request', addFriendBtn.dataset.gameAddFriend);
@@ -2005,7 +2148,307 @@
     fState.strangerSession = null;
   }
 
+  // =========================================================================
+  // 5. In-Chat Polls & Quizzes
+  // =========================================================================
+  let pollDraft = {
+    mode: 'poll',
+    question: '',
+    options: ['', ''],
+    multiple: false,
+    anonymous: false,
+    correctIndex: 0,
+    explanation: ''
+  };
+
+  function openPollModal() {
+    const modal = el('poll-modal');
+    if (!modal || !core()) return;
+    if (!core().getState().activeChatId) {
+      core().showToast('Open a chat or group first to create a poll.', 'info');
+      return;
+    }
+    pollDraft = {
+      mode: 'poll',
+      question: '',
+      options: ['', ''],
+      multiple: false,
+      anonymous: false,
+      correctIndex: 0,
+      explanation: ''
+    };
+    renderPollModal();
+    modal.classList.remove('hidden');
+  }
+
+  function closePollModal() {
+    const modal = el('poll-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function renderPollModal() {
+    const titleEl = el('poll-modal-title');
+    const bodyEl = el('poll-modal-body');
+    if (!bodyEl) return;
+    const isQuiz = pollDraft.mode === 'quiz';
+    if (titleEl) titleEl.textContent = isQuiz ? 'Create Quiz Question' : 'Create Poll';
+
+    bodyEl.innerHTML = `
+      <form id="poll-create-form" class="vr-stack">
+        <div class="vr-seg-tabs" role="tablist">
+          <button type="button" class="vr-seg-tab ${!isQuiz ? 'active' : ''}" data-poll-mode="poll">📊 Poll</button>
+          <button type="button" class="vr-seg-tab ${isQuiz ? 'active' : ''}" data-poll-mode="quiz">🧠 Quiz</button>
+        </div>
+
+        <div class="field-group">
+          <label for="poll-question-input">Question</label>
+          <input id="poll-question-input" type="text" maxlength="280" required placeholder="${isQuiz ? 'Ask a trivia or quiz question...' : 'Ask a question...'}" value="${esc(pollDraft.question)}" />
+        </div>
+
+        <div class="field-group">
+          <label>Options ${isQuiz ? '(Select the correct answer)' : ''}</label>
+          <div class="poll-draft-options">
+            ${pollDraft.options.map((opt, idx) => `
+              <div class="poll-draft-opt-row">
+                ${isQuiz ? `<input type="radio" name="poll-correct-opt" value="${idx}" ${pollDraft.correctIndex === idx ? 'checked' : ''} title="Mark as correct answer" />` : ''}
+                <input type="text" class="poll-opt-input" data-poll-opt-idx="${idx}" maxlength="120" required placeholder="Option ${idx + 1}" value="${esc(opt)}" />
+                ${pollDraft.options.length > 2 ? `<button type="button" class="icon-btn-sm" data-poll-del-opt="${idx}" aria-label="Remove option">✕</button>` : ''}
+              </div>
+            `).join('')}
+          </div>
+          ${pollDraft.options.length < 8 ? '<button type="button" class="secondary-btn sm" id="poll-add-opt-btn">+ Add Option</button>' : ''}
+        </div>
+
+        ${isQuiz ? `
+          <div class="field-group">
+            <label for="poll-explanation-input">Answer Explanation (optional)</label>
+            <input id="poll-explanation-input" type="text" maxlength="300" placeholder="Shown after someone answers..." value="${esc(pollDraft.explanation)}" />
+          </div>
+        ` : `
+          <label class="poll-check-row">
+            <input type="checkbox" id="poll-multi-check" ${pollDraft.multiple ? 'checked' : ''} />
+            <span>Allow multiple answers</span>
+          </label>
+        `}
+
+        <label class="poll-check-row">
+          <input type="checkbox" id="poll-anon-check" ${pollDraft.anonymous ? 'checked' : ''} />
+          <span>Anonymous voting</span>
+        </label>
+
+        <div class="modal-actions">
+          <button type="submit" class="primary-btn full-width">${isQuiz ? 'Send Quiz' : 'Send Poll'}</button>
+        </div>
+      </form>
+    `;
+
+    const qInput = el('poll-question-input');
+    if (qInput) qInput.addEventListener('input', () => { pollDraft.question = qInput.value; });
+    bodyEl.querySelectorAll('.poll-opt-input').forEach((inp) => {
+      inp.addEventListener('input', () => {
+        const i = Number(inp.dataset.pollOptIdx);
+        if (Number.isInteger(i)) pollDraft.options[i] = inp.value;
+      });
+    });
+    const expInp = el('poll-explanation-input');
+    if (expInp) expInp.addEventListener('input', () => { pollDraft.explanation = expInp.value; });
+    const multiChk = el('poll-multi-check');
+    if (multiChk) multiChk.addEventListener('change', () => { pollDraft.multiple = multiChk.checked; });
+    const anonChk = el('poll-anon-check');
+    if (anonChk) anonChk.addEventListener('change', () => { pollDraft.anonymous = anonChk.checked; });
+    bodyEl.querySelectorAll('input[name="poll-correct-opt"]').forEach((rad) => {
+      rad.addEventListener('change', () => {
+        if (rad.checked) pollDraft.correctIndex = Number(rad.value) || 0;
+      });
+    });
+
+    const addBtn = el('poll-add-opt-btn');
+    if (addBtn) {
+      addBtn.addEventListener('click', () => {
+        if (pollDraft.options.length < 8) {
+          pollDraft.options.push('');
+          renderPollModal();
+        }
+      });
+    }
+
+    const form = el('poll-create-form');
+    if (form) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const chatId = core().getState().activeChatId;
+        if (!chatId) return;
+        const cleanOpts = pollDraft.options.map((s) => s.trim()).filter(Boolean);
+        if (!pollDraft.question.trim() || cleanOpts.length < 2) {
+          core().showToast('Enter a question and at least 2 options.', 'error');
+          return;
+        }
+        try {
+          const res = await core().api(`/api/chats/${encodeURIComponent(chatId)}/polls`, {
+            method: 'POST',
+            body: {
+              question: pollDraft.question.trim(),
+              options: cleanOpts,
+              mode: pollDraft.mode,
+              multiple: pollDraft.multiple,
+              anonymous: pollDraft.anonymous,
+              correctOptionIndex: pollDraft.mode === 'quiz' ? Math.min(pollDraft.correctIndex, cleanOpts.length - 1) : null,
+              explanation: pollDraft.explanation.trim()
+            }
+          });
+          closePollModal();
+          if (res.message && !core().getState().messages.some((m) => m.id === res.message.id)) {
+            core().getState().messages.push(res.message);
+            core().renderMessages(true);
+          }
+          await core().refreshChats();
+        } catch (err) {
+          core().showToast(err.message || 'Could not create poll.', 'error');
+        }
+      });
+    }
+  }
+
+  function handlePollModalClick(e) {
+    const modeBtn = e.target.closest('[data-poll-mode]');
+    if (modeBtn) {
+      pollDraft.mode = modeBtn.dataset.pollMode === 'quiz' ? 'quiz' : 'poll';
+      renderPollModal();
+      return;
+    }
+    const delOpt = e.target.closest('[data-poll-del-opt]');
+    if (delOpt && pollDraft.options.length > 2) {
+      const idx = Number(delOpt.dataset.pollDelOpt);
+      pollDraft.options.splice(idx, 1);
+      if (pollDraft.correctIndex >= pollDraft.options.length) pollDraft.correctIndex = 0;
+      renderPollModal();
+    }
+  }
+
+  async function votePollOption(chatId, pollId, optionIdx) {
+    if (!core() || !chatId || !pollId) return;
+    const msg = (core().getState().messages || []).find((m) => m.kind === 'poll' && m.poll && m.poll.id === pollId);
+    if (!msg || !msg.poll) return;
+    const poll = msg.poll;
+    const me = getMyUsername();
+    let nextIndexes = [optionIdx];
+
+    if (poll.multiple && poll.mode !== 'quiz') {
+      const curSet = new Set();
+      (poll.options || []).forEach((opt, i) => {
+        const voted = typeof opt.votedByMe === 'boolean'
+          ? opt.votedByMe
+          : (Array.isArray(opt.votes) && opt.votes.includes(me));
+        if (voted) curSet.add(i);
+      });
+      if (curSet.has(optionIdx)) curSet.delete(optionIdx);
+      else curSet.add(optionIdx);
+      nextIndexes = Array.from(curSet);
+    }
+
+    try {
+      const res = await core().api(`/api/chats/${encodeURIComponent(chatId)}/polls/${encodeURIComponent(pollId)}/vote`, {
+        method: 'POST',
+        body: { optionIndexes: nextIndexes }
+      });
+      if (res.message) {
+        const msgs = core().getState().messages;
+        const idx = msgs.findIndex((m) => m.id === res.message.id);
+        if (idx >= 0) {
+          msgs[idx] = res.message;
+          core().renderMessages(false);
+        }
+      }
+    } catch (err) {
+      core().showToast(err.message || 'Vote failed.', 'error');
+    }
+  }
+
+  async function closePollById(chatId, pollId) {
+    if (!core() || !chatId || !pollId) return;
+    try {
+      const res = await core().api(`/api/chats/${encodeURIComponent(chatId)}/polls/${encodeURIComponent(pollId)}/close`, {
+        method: 'POST'
+      });
+      if (res.message) {
+        const msgs = core().getState().messages;
+        const idx = msgs.findIndex((m) => m.id === res.message.id);
+        if (idx >= 0) {
+          msgs[idx] = res.message;
+          core().renderMessages(false);
+        }
+      }
+    } catch (err) {
+      core().showToast(err.message || 'Could not close poll.', 'error');
+    }
+  }
+
+  function renderPollBubbleHtml(msg) {
+    const p = msg && msg.poll;
+    if (!p) return '';
+    const me = getMyUsername();
+    const isQuiz = p.mode === 'quiz';
+    const opts = Array.isArray(p.options) ? p.options : [];
+    const totalVotes = opts.reduce((sum, o) => sum + (typeof o.voteCount === 'number' ? o.voteCount : (Array.isArray(o.votes) ? o.votes.length : 0)), 0);
+    const hasVoted = opts.some((o) => (typeof o.votedByMe === 'boolean' ? o.votedByMe : (Array.isArray(o.votes) && o.votes.includes(me))));
+    const showResults = !isQuiz || hasVoted || Boolean(p.closed);
+    const canClose = !p.closed && p.creator === me;
+
+    const tags = [isQuiz ? '🧠 QUIZ' : '📊 POLL'];
+    if (p.multiple) tags.push('Multiple');
+    if (p.anonymous) tags.push('Anonymous');
+    if (p.closed) tags.push('Closed');
+
+    const optionsHtml = opts.map((opt, idx) => {
+      const count = typeof opt.voteCount === 'number' ? opt.voteCount : (Array.isArray(opt.votes) ? opt.votes.length : 0);
+      const voted = typeof opt.votedByMe === 'boolean' ? opt.votedByMe : (Array.isArray(opt.votes) && opt.votes.includes(me));
+      const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+
+      let quizCls = '';
+      let markIcon = voted ? '✓' : '';
+      if (isQuiz && showResults && p.correctOptionIndex !== null && p.correctOptionIndex !== undefined) {
+        if (idx === p.correctOptionIndex) {
+          quizCls = 'quiz-correct';
+          markIcon = '✅';
+        } else if (voted) {
+          quizCls = 'quiz-wrong';
+          markIcon = '❌';
+        }
+      }
+
+      return `
+        <button type="button" class="poll-option-btn ${voted ? 'voted' : ''} ${quizCls}" data-poll-id="${esc(p.id)}" data-poll-vote="${idx}" ${p.closed || (isQuiz && hasVoted) ? 'disabled' : ''}>
+          <span class="poll-opt-fill" style="width:${showResults ? pct : 0}%"></span>
+          <span class="poll-opt-row">
+            <span class="poll-opt-check">${markIcon}</span>
+            <span class="poll-opt-text">${esc(opt.text)}</span>
+            ${showResults ? `<span class="poll-opt-pct">${pct}%</span>` : ''}
+          </span>
+        </button>
+      `;
+    }).join('');
+
+    const explanationHtml = isQuiz && showResults && p.explanation
+      ? `<div class="poll-explanation">💡 ${esc(p.explanation)}</div>`
+      : '';
+
+    return `
+      <div class="poll-card">
+        <div class="poll-card-badges">${tags.map((t) => `<span class="poll-tag">${esc(t)}</span>`).join('')}</div>
+        <div class="poll-question">${esc(p.question)}</div>
+        <div class="poll-options-list">${optionsHtml}</div>
+        ${explanationHtml}
+        <div class="poll-footer">
+          <span>${totalVotes} vote${totalVotes === 1 ? '' : 's'}</span>
+          ${canClose ? `<button type="button" class="poll-close-btn" data-poll-close="${esc(p.id)}">Close ${isQuiz ? 'Quiz' : 'Poll'}</button>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
   function handleEscape() {
+    const pm = el('poll-modal');
+    if (pm && !pm.classList.contains('hidden')) { closePollModal(); return true; }
     const gm = el('games-modal');
     if (gm && !gm.classList.contains('hidden')) { closeGamesModal(); return true; }
     const grm = el('group-modal');
@@ -2103,6 +2546,10 @@
     if (el('games-modal-backdrop')) el('games-modal-backdrop').addEventListener('click', closeGamesModal);
     if (el('games-modal-body')) el('games-modal-body').addEventListener('click', handleGamesBodyClick);
 
+    if (el('poll-modal-close')) el('poll-modal-close').addEventListener('click', closePollModal);
+    if (el('poll-backdrop')) el('poll-backdrop').addEventListener('click', closePollModal);
+    if (el('poll-modal-body')) el('poll-modal-body').addEventListener('click', handlePollModalClick);
+
     if (el('info-room-controls')) {
       el('info-room-controls').addEventListener('click', handleRoomInfoClick);
     }
@@ -2169,6 +2616,11 @@
     renderRoomInfo,
     renderGameBubbleHtml,
     renderCallBubbleHtml,
+    renderPollBubbleHtml,
+    openPollModal,
+    votePollOption,
+    closePollById,
+    rematchGame,
     cancelGameById,
     openGameById,
     openStrangerModal,

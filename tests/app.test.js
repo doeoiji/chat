@@ -2192,6 +2192,278 @@ test('chat archive and unarchive lifecycle: single, bulk, Saved Messages protect
   assert.equal(prefsAfterDelete.archivedChats.includes(dmCarol), false);
 });
 
+test('push notifications: VAPID encryption, Web Push & FCM token lifecycle, and mute suppression', async (t) => {
+  const crypto = require('node:crypto');
+  const { createPushService, encryptWebPushPayload, toBase64Url } = require('../src/push');
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-push-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null, fcmServerKey: 'test-fcm-key' });
+  const storage = createStorage(config);
+  const pushCalls = [];
+  let nextWebPushStatus = 201;
+  const push = createPushService({
+    config,
+    storage,
+    transportFetch: async (url, init) => {
+      pushCalls.push({ url, init });
+      if (url.includes('fcm.googleapis.com')) {
+        return { ok: true, status: 200, json: async () => ({ results: [{ message_id: 'fcm_1' }] }), text: async () => '{}' };
+      }
+      return { ok: nextWebPushStatus >= 200 && nextWebPushStatus < 300, status: nextWebPushStatus, text: async () => '' };
+    }
+  });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage,
+    hub: createRealtimeHub(),
+    mailer: createMailer(config),
+    push
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_ps', 'alice.ps@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_ps', 'bob.ps@gmail.com');
+
+  const cfgRes = await invokeRouter(handleRequest, '/api/push/config', { headers: { Cookie: alice.cookie } });
+  assert.equal(cfgRes.status, 200);
+  assert.ok(cfgRes.body.vapidPublicKey && cfgRes.body.vapidPublicKey.length >= 80);
+  assert.equal(cfgRes.body.fcmEnabled, true);
+
+  // Real P-256 ECDH subscription keys -> verify RFC 8291 aes128gcm encryption
+  const uaEcdh = crypto.createECDH('prime256v1');
+  uaEcdh.generateKeys();
+  const sub = {
+    endpoint: 'https://updates.push.services.mozilla.com/wpush/v2/mock-endpoint-1',
+    keys: {
+      p256dh: toBase64Url(uaEcdh.getPublicKey()),
+      auth: toBase64Url(crypto.randomBytes(16))
+    }
+  };
+  const encrypted = encryptWebPushPayload(sub, Buffer.from('{"title":"Hi"}'));
+  assert.ok(Buffer.isBuffer(encrypted) && encrypted.length > 86);
+
+  const subRes = await invokeRouter(handleRequest, '/api/push/web/subscribe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ subscription: sub })
+  });
+  assert.equal(subRes.status, 200);
+  assert.equal(subRes.body.count, 1);
+
+  const fcmRes = await invokeRouter(handleRequest, '/api/push/fcm/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ token: 'mock_fcm_device_token_123', platform: 'android' })
+  });
+  assert.equal(fcmRes.status, 200);
+  assert.equal(fcmRes.body.count, 1);
+
+  const testPushRes = await invokeRouter(handleRequest, '/api/push/test', {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(testPushRes.status, 200);
+  assert.equal(testPushRes.body.webSent, 1);
+  assert.equal(testPushRes.body.fcmSent, 1);
+  assert.equal(pushCalls.length, 2);
+
+  // Muted chat suppresses notifications; 410 prunes expired Web Push subscription
+  const dmId = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_ps' })
+  })).body.chat.id;
+
+  await invokeRouter(handleRequest, `/api/chats/${dmId}/prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ muted: true })
+  });
+  const suppressed = await push.notifyUser('bob_ps', { title: 'Alice', body: 'Hidden' }, { chatId: dmId });
+  assert.equal(suppressed.suppressed, true);
+
+  nextWebPushStatus = 410;
+  await push.notifyUser('bob_ps', { title: 'Test', body: 'Gone sub' }, { ignoreMute: true });
+  const tokensAfterGone = await storage.getUserPushTokens('bob_ps');
+  assert.equal(tokensAfterGone.webSubscriptions.length, 0);
+});
+
+test('polls, quizzes, game leaderboards, streaks, disappearing messages, view-once, and voice waveforms', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-eng-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const storage = createStorage(config);
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage,
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_e', 'alice.e@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_e', 'bob.e@gmail.com');
+
+  // Friend Alice & Bob so games work
+  await invokeRouter(handleRequest, '/api/friends/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_e' })
+  });
+  await invokeRouter(handleRequest, '/api/friends/accept', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ username: 'alice_e' })
+  });
+
+  const dmId = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_e' })
+  })).body.chat.id;
+
+  // 1. In-Chat Quiz conceals correct answer before vote, reveals + explains after vote
+  const quizCreate = await invokeRouter(handleRequest, `/api/chats/${dmId}/polls`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({
+      mode: 'quiz',
+      question: '2 + 2 = ?',
+      options: ['3', '4', '5'],
+      correctOptionIndex: 1,
+      explanation: 'Basic arithmetic!'
+    })
+  });
+  assert.equal(quizCreate.status, 201);
+  const quizId = quizCreate.body.message.poll.id;
+
+  const bobViewBeforeVote = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, { headers: { Cookie: bob.cookie } });
+  const bobQuizMsg = bobViewBeforeVote.body.messages.find((m) => m.poll && m.poll.id === quizId);
+  assert.equal(bobQuizMsg.poll.correctOptionIndex, null);
+  assert.equal(bobQuizMsg.poll.explanation, '');
+
+  const bobVoteRes = await invokeRouter(handleRequest, `/api/chats/${dmId}/polls/${quizId}/vote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ optionIndex: 1 })
+  });
+  assert.equal(bobVoteRes.status, 200);
+  assert.equal(bobVoteRes.body.message.poll.correctOptionIndex, 1);
+  assert.equal(bobVoteRes.body.message.poll.explanation, 'Basic arithmetic!');
+
+  // 2. Tic-Tac-Toe win -> records leaderboard stats & streak
+  const gameCreate = await invokeRouter(handleRequest, `/api/chats/${dmId}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ gameType: 'tictactoe' })
+  });
+  assert.equal(gameCreate.status, 201);
+  const gId = gameCreate.body.message.game.id;
+  // Alice (X) plays 0, 1, 2; Bob (O) plays 3, 4
+  const moves = [
+    [alice.cookie, { index: 0 }],
+    [bob.cookie, { index: 3 }],
+    [alice.cookie, { index: 1 }],
+    [bob.cookie, { index: 4 }],
+    [alice.cookie, { index: 2 }]
+  ];
+  for (const [cookie, mv] of moves) {
+    const mr = await invokeRouter(handleRequest, `/api/chats/${dmId}/games/${gId}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ move: mv })
+    });
+    assert.equal(mr.status, 200);
+  }
+  const lbRes = await invokeRouter(handleRequest, '/api/games/leaderboard', { headers: { Cookie: alice.cookie } });
+  assert.equal(lbRes.status, 200);
+  assert.equal(lbRes.body.myStats.wins, 1);
+  assert.equal(lbRes.body.myStats.currentStreak, 1);
+  assert.equal(lbRes.body.myStats.bestStreak, 1);
+  assert.equal(lbRes.body.myStats.vs.bob_e.wins, 1);
+  assert.equal(lbRes.body.leaderboard[0].username, 'alice_e');
+
+  // 3. View-Once message with attachment: sealed -> open once -> burn destroys file
+  const voBoundary = '----VRViewOnceBoundary';
+  const voPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  const voBody = Buffer.concat([
+    Buffer.from(`--${voBoundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\nTop secret caption\r\n`),
+    Buffer.from(`--${voBoundary}\r\nContent-Disposition: form-data; name="viewOnce"\r\n\r\n1\r\n`),
+    Buffer.from(`--${voBoundary}\r\nContent-Disposition: form-data; name="files"; filename="secret.png"\r\nContent-Type: image/png\r\n\r\n`),
+    voPng,
+    Buffer.from(`\r\n--${voBoundary}--\r\n`)
+  ]);
+  const voSent = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, {
+    method: 'POST',
+    headers: { Cookie: alice.cookie, 'Content-Type': `multipart/form-data; boundary=${voBoundary}` },
+    body: voBody
+  });
+  assert.equal(voSent.status, 201);
+  const voMsgId = voSent.body.message.id;
+  const rawStoredUrl = voSent.body.message.attachments[0].url;
+
+  const bobSealed = (await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, { headers: { Cookie: bob.cookie } })).body.messages.find((m) => m.id === voMsgId);
+  assert.equal(bobSealed.viewOnceState, 'sealed');
+  assert.equal(bobSealed.text, '');
+  assert.equal(bobSealed.attachments.length, 0);
+
+  // Direct file download blocked for Bob without viewToken
+  const snoopRes = await invokeRouter(handleRequest, rawStoredUrl, { headers: { Cookie: bob.cookie } });
+  assert.equal(snoopRes.status, 404);
+
+  // Reveal once -> grants tokenized attachment URL
+  const revealRes = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages/${voMsgId}/view-once`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(revealRes.status, 200);
+  assert.equal(revealRes.body.message.text, 'Top secret caption');
+  assert.ok(revealRes.body.message.attachments[0].url.includes('viewToken='));
+
+  const fetchedOnce = await invokeRouter(handleRequest, revealRes.body.message.attachments[0].url, { headers: { Cookie: bob.cookie } });
+  assert.equal(fetchedOnce.status, 200);
+
+  // Burn -> permanently wipes file and blocks second open
+  const burnRes = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages/${voMsgId}/view-once/burn`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(burnRes.status, 200);
+  assert.equal(burnRes.body.message.viewOnceState, 'consumed');
+
+  const secondReveal = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages/${voMsgId}/view-once`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(secondReveal.status, 410);
+
+  // 4. Voice waveform meta & disappearing message auto-expiry
+  const vBoundary = '----VRVoiceBoundary';
+  const voiceMetaJson = JSON.stringify({ durationSec: 7, peaks: [18, 45, 82, 60, 25] });
+  const vBody = Buffer.concat([
+    Buffer.from(`--${vBoundary}\r\nContent-Disposition: form-data; name="voiceMeta"\r\n\r\n${voiceMetaJson}\r\n`),
+    Buffer.from(`--${vBoundary}\r\nContent-Disposition: form-data; name="ttlSeconds"\r\n\r\n1\r\n`),
+    Buffer.from(`--${vBoundary}\r\nContent-Disposition: form-data; name="files"; filename="voice-1.webm"\r\nContent-Type: audio/webm\r\n\r\n`),
+    Buffer.from('OggS_fake_audio_bytes'),
+    Buffer.from(`\r\n--${vBoundary}--\r\n`)
+  ]);
+  const voiceRes = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, {
+    method: 'POST',
+    headers: { Cookie: alice.cookie, 'Content-Type': `multipart/form-data; boundary=${vBoundary}` },
+    body: vBody
+  });
+  assert.equal(voiceRes.status, 201);
+  assert.equal(voiceRes.body.message.voiceMeta.durationSec, 7);
+  assert.deepEqual(voiceRes.body.message.voiceMeta.peaks, [18, 45, 82, 60, 25]);
+  assert.ok(voiceRes.body.message.expiresAt);
+
+  // Wait > 1.05s -> disappearing message expires and is purged cleanly
+  await new Promise((r) => setTimeout(r, 1100));
+  const afterExp = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, { headers: { Cookie: bob.cookie } });
+  assert.equal(afterExp.body.messages.some((m) => m.id === voiceRes.body.message.id), false);
+});
+
+
 
 
 
