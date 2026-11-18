@@ -704,6 +704,7 @@ test('frontend app.js and features.js boot cleanly and match HTML element IDs', 
     localStorage: { getItem() { return null; }, setItem() {} },
     document: {
       documentElement: makeEl('html'),
+      body: makeEl('body'),
       getElementById(id) {
         if (!elements.has(id)) elements.set(id, makeEl(id));
         return elements.get(id);
@@ -733,6 +734,17 @@ test('frontend app.js and features.js boot cleanly and match HTML element IDs', 
   vm.runInNewContext(featuresJs, sandbox);
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(authScreenShown, true);
+
+  // Verify renderMessages & Android back gesture handler work without ReferenceError
+  sandbox.window.VibeRoomCore.getState().activeChatId = 'sec_alice__bob';
+  sandbox.window.VibeRoomCore.getState().me = { username: 'alice' };
+  sandbox.document.getElementById('app-shell').classList.add('mobile-chat-open');
+  assert.doesNotThrow(() => sandbox.window.VibeRoomCore.renderMessages(false));
+  assert.equal(sandbox.document.body.classList.contains('privacy-screen-protected'), true);
+  assert.equal(sandbox.window.__telechatHandleBack(), true);
+  assert.equal(sandbox.document.getElementById('app-shell').classList.contains('mobile-chat-open'), false);
+  assert.equal(sandbox.window.VibeRoomCore.getState().activeChatId, null);
+  assert.equal(sandbox.document.body.classList.contains('privacy-screen-protected'), false);
   assert.equal(typeof sandbox.window.VibeRoomCore, 'object');
   assert.equal(typeof sandbox.window.VibeRoomFeatures, 'object');
 });

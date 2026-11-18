@@ -3103,6 +3103,7 @@
 
     if (msgs.length === 0) {
       els.messagesList.innerHTML = emptyHtml;
+      syncScreenCaptureProtection();
       return;
     }
 
@@ -5031,6 +5032,130 @@
     } catch (err) {
       cleanupToken();
       showToast(err.message || 'Could not send keyboard sticker/GIF.', 'error');
+    }
+  }
+
+  let lastNativeScreenBlock = null;
+  function syncScreenCaptureProtection() {
+    if (typeof document === 'undefined' || !document.body) return;
+    const isSecretChat = Boolean(
+      String(state.activeChatId || '').startsWith('sec_') ||
+      (state.activeChatMeta && state.activeChatMeta.type === 'secret')
+    );
+    const hasVisibleTimedOrSecret = Boolean(
+      state.activeChatId &&
+      Array.isArray(state.messages) &&
+      state.messages.some((m) => m && !m.consumed && (m.viewOnce || m.timed || m.secretMsg || m.expiresAt))
+    );
+    const viewOnceOpen = Boolean(els.viewOnceModal && !els.viewOnceModal.classList.contains('hidden'));
+    const shouldProtect = Boolean(isSecretChat || hasVisibleTimedOrSecret || viewOnceOpen || state.lightboxProtected);
+
+    document.body.classList.toggle('privacy-screen-protected', shouldProtect);
+    if (!shouldProtect && els.privacyCurtain) {
+      els.privacyCurtain.classList.add('hidden');
+    }
+    if (lastNativeScreenBlock !== shouldProtect) {
+      lastNativeScreenBlock = shouldProtect;
+      if (typeof window !== 'undefined' && window.AndroidBridge && typeof window.AndroidBridge.setScreenCaptureBlocked === 'function') {
+        try {
+          window.AndroidBridge.setScreenCaptureBlocked(Boolean(shouldProtect));
+        } catch {
+        }
+      }
+    }
+  }
+
+  let activeViewOnceContext = null;
+  async function closeAndBurnViewOnceModal() {
+    if (els.viewOnceModal) els.viewOnceModal.classList.add('hidden');
+    if (els.viewOnceBody) els.viewOnceBody.innerHTML = '';
+    const ctx = activeViewOnceContext;
+    activeViewOnceContext = null;
+    syncScreenCaptureProtection();
+    if (ctx && !ctx.isTimed && !ctx.alreadyBurned && ctx.chatId && ctx.msgId) {
+      try {
+        const res = await api(`/api/chats/${encodeURIComponent(ctx.chatId)}/messages/${encodeURIComponent(ctx.msgId)}/view-once/burn`, {
+          method: 'POST'
+        });
+        if (res.message && state.activeChatId === ctx.chatId) {
+          const idx = state.messages.findIndex((m) => m.id === res.message.id);
+          if (idx >= 0) {
+            state.messages[idx] = res.message;
+            renderMessages(false);
+          }
+        }
+      } catch {
+        // Already burned
+      }
+    }
+  }
+
+  async function openViewOnceById(msgId) {
+    if (!state.activeChatId || !msgId) return;
+    const chatId = state.activeChatId;
+    try {
+      const res = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/view-once`, {
+        method: 'POST'
+      });
+      const revealed = res.message;
+      if (!revealed || !els.viewOnceModal || !els.viewOnceBody) return;
+      activeViewOnceContext = { chatId, msgId, alreadyBurned: Boolean(res.consumed), isTimed: false };
+      if (els.viewOnceTitle) els.viewOnceTitle.textContent = '1× View-Once Message';
+      if (els.viewOnceDesc) els.viewOnceDesc.textContent = 'Protected view — closing permanently self-destructs this message.';
+
+      const parts = [];
+      if (Array.isArray(revealed.attachments)) {
+        for (const att of revealed.attachments) {
+          if (att.isImage) {
+            parts.push(`<img class="view-once-media" draggable="false" src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" />`);
+          } else if (att.mimeType && att.mimeType.startsWith('video/')) {
+            parts.push(`<video class="view-once-media" controls controlsList="nodownload" autoplay src="${escapeHtml(att.url)}"></video>`);
+          } else if (att.mimeType && att.mimeType.startsWith('audio/')) {
+            parts.push(`<audio class="view-once-audio" controls controlsList="nodownload" autoplay src="${escapeHtml(att.url)}"></audio>`);
+          } else {
+            parts.push(`<a class="secondary-btn" href="${escapeHtml(att.url)}&download=1" download="${escapeHtml(att.originalName)}">⬇ ${escapeHtml(att.originalName)}</a>`);
+          }
+        }
+      }
+      if (revealed.text) {
+        parts.push(`<div class="view-once-text">${linkifyText(revealed.text)}</div>`);
+      }
+      els.viewOnceBody.innerHTML = parts.join('') || '<div class="vr-hint">Empty View-Once content</div>';
+      els.viewOnceModal.classList.remove('hidden');
+      syncScreenCaptureProtection();
+
+      if (res.consumed) {
+        const idx = state.messages.findIndex((m) => m.id === msgId);
+        if (idx >= 0) {
+          state.messages[idx] = { ...state.messages[idx], consumed: true, viewOnceState: 'consumed' };
+          renderMessages(false);
+        }
+      }
+    } catch (err) {
+      showToast(err.message || 'Unable to reveal View-Once message.', 'error');
+    }
+  }
+
+  async function openTimedById(msgId) {
+    if (!state.activeChatId || !msgId) return;
+    const chatId = state.activeChatId;
+    try {
+      const res = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/open-timed`, {
+        method: 'POST'
+      });
+      const revealed = res.message;
+      if (!revealed) return;
+      if (state.activeChatId === chatId) {
+        const idx = state.messages.findIndex((m) => m.id === msgId);
+        if (idx >= 0) {
+          state.messages[idx] = revealed;
+        } else {
+          state.messages.push(revealed);
+        }
+        renderMessages(false);
+      }
+    } catch (err) {
+      showToast(err.message || 'Unable to open timed message.', 'error');
     }
   }
 
@@ -7057,130 +7182,6 @@
           els.msgTimerPopover.classList.add('hidden');
         }
       });
-    }
-
-    let lastNativeScreenBlock = null;
-    function syncScreenCaptureProtection() {
-      if (typeof document === 'undefined' || !document.body) return;
-      const isSecretChat = Boolean(
-        String(state.activeChatId || '').startsWith('sec_') ||
-        (state.activeChatMeta && state.activeChatMeta.type === 'secret')
-      );
-      const hasVisibleTimedOrSecret = Boolean(
-        state.activeChatId &&
-        Array.isArray(state.messages) &&
-        state.messages.some((m) => m && !m.consumed && (m.viewOnce || m.timed || m.secretMsg || m.expiresAt))
-      );
-      const viewOnceOpen = Boolean(els.viewOnceModal && !els.viewOnceModal.classList.contains('hidden'));
-      const shouldProtect = Boolean(isSecretChat || hasVisibleTimedOrSecret || viewOnceOpen || state.lightboxProtected);
-
-      document.body.classList.toggle('privacy-screen-protected', shouldProtect);
-      if (!shouldProtect && els.privacyCurtain) {
-        els.privacyCurtain.classList.add('hidden');
-      }
-      if (lastNativeScreenBlock !== shouldProtect) {
-        lastNativeScreenBlock = shouldProtect;
-        if (typeof window !== 'undefined' && window.AndroidBridge && typeof window.AndroidBridge.setScreenCaptureBlocked === 'function') {
-          try {
-            window.AndroidBridge.setScreenCaptureBlocked(Boolean(shouldProtect));
-          } catch {
-          }
-        }
-      }
-    }
-
-    let activeViewOnceContext = null;
-    async function closeAndBurnViewOnceModal() {
-      if (els.viewOnceModal) els.viewOnceModal.classList.add('hidden');
-      if (els.viewOnceBody) els.viewOnceBody.innerHTML = '';
-      const ctx = activeViewOnceContext;
-      activeViewOnceContext = null;
-      syncScreenCaptureProtection();
-      if (ctx && !ctx.isTimed && !ctx.alreadyBurned && ctx.chatId && ctx.msgId) {
-        try {
-          const res = await api(`/api/chats/${encodeURIComponent(ctx.chatId)}/messages/${encodeURIComponent(ctx.msgId)}/view-once/burn`, {
-            method: 'POST'
-          });
-          if (res.message && state.activeChatId === ctx.chatId) {
-            const idx = state.messages.findIndex((m) => m.id === res.message.id);
-            if (idx >= 0) {
-              state.messages[idx] = res.message;
-              renderMessages(false);
-            }
-          }
-        } catch {
-          // Already burned
-        }
-      }
-    }
-
-    async function openViewOnceById(msgId) {
-      if (!state.activeChatId || !msgId) return;
-      const chatId = state.activeChatId;
-      try {
-        const res = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/view-once`, {
-          method: 'POST'
-        });
-        const revealed = res.message;
-        if (!revealed || !els.viewOnceModal || !els.viewOnceBody) return;
-        activeViewOnceContext = { chatId, msgId, alreadyBurned: Boolean(res.consumed), isTimed: false };
-        if (els.viewOnceTitle) els.viewOnceTitle.textContent = '1× View-Once Message';
-        if (els.viewOnceDesc) els.viewOnceDesc.textContent = 'Protected view — closing permanently self-destructs this message.';
-
-        const parts = [];
-        if (Array.isArray(revealed.attachments)) {
-          for (const att of revealed.attachments) {
-            if (att.isImage) {
-              parts.push(`<img class="view-once-media" draggable="false" src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" />`);
-            } else if (att.mimeType && att.mimeType.startsWith('video/')) {
-              parts.push(`<video class="view-once-media" controls controlsList="nodownload" autoplay src="${escapeHtml(att.url)}"></video>`);
-            } else if (att.mimeType && att.mimeType.startsWith('audio/')) {
-              parts.push(`<audio class="view-once-audio" controls controlsList="nodownload" autoplay src="${escapeHtml(att.url)}"></audio>`);
-            } else {
-              parts.push(`<a class="secondary-btn" href="${escapeHtml(att.url)}&download=1" download="${escapeHtml(att.originalName)}">⬇ ${escapeHtml(att.originalName)}</a>`);
-            }
-          }
-        }
-        if (revealed.text) {
-          parts.push(`<div class="view-once-text">${linkifyText(revealed.text)}</div>`);
-        }
-        els.viewOnceBody.innerHTML = parts.join('') || '<div class="vr-hint">Empty View-Once content</div>';
-        els.viewOnceModal.classList.remove('hidden');
-        syncScreenCaptureProtection();
-
-        if (res.consumed) {
-          const idx = state.messages.findIndex((m) => m.id === msgId);
-          if (idx >= 0) {
-            state.messages[idx] = { ...state.messages[idx], consumed: true, viewOnceState: 'consumed' };
-            renderMessages(false);
-          }
-        }
-      } catch (err) {
-        showToast(err.message || 'Unable to reveal View-Once message.', 'error');
-      }
-    }
-
-    async function openTimedById(msgId) {
-      if (!state.activeChatId || !msgId) return;
-      const chatId = state.activeChatId;
-      try {
-        const res = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/open-timed`, {
-          method: 'POST'
-        });
-        const revealed = res.message;
-        if (!revealed) return;
-        if (state.activeChatId === chatId) {
-          const idx = state.messages.findIndex((m) => m.id === msgId);
-          if (idx >= 0) {
-            state.messages[idx] = revealed;
-          } else {
-            state.messages.push(revealed);
-          }
-          renderMessages(false);
-        }
-      } catch (err) {
-        showToast(err.message || 'Unable to open timed message.', 'error');
-      }
     }
 
     // Web screenshot / capture deterrence when secret chats or timed messages are visible
