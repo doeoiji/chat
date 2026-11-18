@@ -2067,6 +2067,14 @@
         previewHtml = escapeHtml(`${prefix}${last.preview || ''}`);
       }
       const timeStr = last ? formatSidebarTime(last.createdAt) : '';
+      let sidebarTicksHtml = '';
+      if (!isSaved && !isTyping && !draftText && last && state.me && last.sender === state.me.username) {
+        const rb = Array.isArray(last.readBy) ? last.readBy : [];
+        const isSeen = isRoom
+          ? rb.some((u) => u !== state.me.username)
+          : Boolean(peer && rb.includes(peer.username));
+        sidebarTicksHtml = `<span class="sidebar-read-ticks${isSeen ? ' read' : ''}" title="${isSeen ? 'Seen' : 'Sent'}">${isSeen ? '✓✓' : '✓'}</span>`;
+      }
       const unread = Number(chat.unreadCount || 0);
       const avatarSeed = isSaved
         ? { displayName: 'Saved Messages', avatarColor: 'var(--accent)' }
@@ -2103,7 +2111,7 @@
           <div class="chat-row-body">
             <div class="chat-row-top">
               <span class="chat-row-name">${roomTag}${escapeHtml(rowTitle)}${prefBadges}</span>
-              <span class="chat-row-time">${escapeHtml(timeStr)}</span>
+              <span class="chat-row-meta">${sidebarTicksHtml}<span class="chat-row-time">${escapeHtml(timeStr)}</span></span>
             </div>
             <div class="chat-row-bottom">
               <span class="chat-row-preview">${previewHtml}</span>
@@ -4430,6 +4438,21 @@
               ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
               : 'New message')));
 
+      const existingChatObj = state.chats.find((c) => c.id === data.chatId);
+      if (existingChatObj && !isSystem) {
+        existingChatObj.lastMessage = {
+          id: data.message.id,
+          sender: data.message.sender,
+          preview: bodyPreview,
+          readBy: Array.isArray(data.message.readBy) ? data.message.readBy.slice() : [data.message.sender],
+          createdAt: data.message.createdAt
+        };
+        existingChatObj.updatedAt = data.message.createdAt;
+        if (!isIncoming || data.chatId === state.activeChatId) {
+          renderSidebar();
+        }
+      }
+
       if (data.chatId === state.activeChatId) {
         const wasNearBottom = isNearBottom();
         if (!state.messages.some((m) => m.id === data.message.id)) {
@@ -4499,8 +4522,22 @@
 
     es.addEventListener('read_receipt', (ev) => {
       const data = JSON.parse(ev.data);
-      if (data.chatId !== state.activeChatId) return;
       const idSet = new Set(data.messageIds || []);
+
+      const chatObj = state.chats.find((c) => c.id === data.chatId);
+      let sidebarChanged = false;
+      if (chatObj && chatObj.lastMessage && (!idSet.size || idSet.has(chatObj.lastMessage.id))) {
+        if (!Array.isArray(chatObj.lastMessage.readBy)) {
+          chatObj.lastMessage.readBy = chatObj.lastMessage.sender ? [chatObj.lastMessage.sender] : [];
+        }
+        if (data.reader && !chatObj.lastMessage.readBy.includes(data.reader)) {
+          chatObj.lastMessage.readBy.push(data.reader);
+          sidebarChanged = true;
+        }
+      }
+      if (sidebarChanged) renderSidebar();
+
+      if (data.chatId !== state.activeChatId) return;
       let changed = false;
       for (const m of state.messages) {
         if (idSet.has(m.id)) {

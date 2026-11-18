@@ -2461,6 +2461,21 @@ test('polls, quizzes, game leaderboards, streaks, disappearing messages, view-on
   await new Promise((r) => setTimeout(r, 1100));
   const afterExp = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, { headers: { Cookie: bob.cookie } });
   assert.equal(afterExp.body.messages.some((m) => m.id === voiceRes.body.message.id), false);
+
+  // 5. Sidebar lastMessage readBy (sent -> seen ticks outside chat)
+  await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Check sidebar tick' })
+  });
+  const listSentOnly = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  const dmSummaryBeforeRead = listSentOnly.find((c) => c.id === dmId);
+  assert.deepEqual(dmSummaryBeforeRead.lastMessage.readBy, ['alice_e']);
+
+  await invokeRouter(handleRequest, `/api/chats/${dmId}/read`, { method: 'POST', headers: { Cookie: bob.cookie } });
+  const listSeen = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  const dmSummaryAfterRead = listSeen.find((c) => c.id === dmId);
+  assert.equal(dmSummaryAfterRead.lastMessage.readBy.includes('bob_e'), true);
 });
 
 

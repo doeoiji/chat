@@ -1541,6 +1541,18 @@ function createStorage(config) {
       }
 
       const visibleMeta = getVisibleChatMeta(meta, clean);
+      if (visibleMeta && visibleMeta.lastMessage && !Array.isArray(visibleMeta.lastMessage.readBy)) {
+        const msgsForRead = await readJson(path.join(config.chatsDir, entry.name, 'messages.json'), []);
+        const foundLast = Array.isArray(msgsForRead)
+          ? (msgsForRead.find((m) => m.id === visibleMeta.lastMessage.id) || msgsForRead[msgsForRead.length - 1])
+          : null;
+        visibleMeta.lastMessage = {
+          ...visibleMeta.lastMessage,
+          readBy: foundLast && Array.isArray(foundLast.readBy)
+            ? foundLast.readBy.slice()
+            : (visibleMeta.lastMessage.sender ? [visibleMeta.lastMessage.sender] : [])
+        };
+      }
       const isPinned = pinnedSet.has(meta.id);
       const isMuted = mutedSet.has(meta.id);
       const isArchived = meta.type === 'saved' ? false : archivedSet.has(meta.id);
@@ -1674,6 +1686,7 @@ function createStorage(config) {
       id: msg.id,
       sender: msg.sender,
       preview,
+      readBy: Array.isArray(msg.readBy) ? msg.readBy.slice() : (msg.sender ? [msg.sender] : []),
       hasImage: !msg.viewOnce && atts.some((a) => a.isImage),
       hasFile: !msg.viewOnce && atts.some((a) => !a.isImage),
       createdAt: msg.createdAt
@@ -1978,8 +1991,40 @@ function createStorage(config) {
         await writeJsonAtomic(messagesPath, messages);
       }
 
+      let metaDirty = false;
       if (meta.unreadCounts && meta.unreadCounts[username] > 0) {
         meta.unreadCounts[username] = 0;
+        metaDirty = true;
+      }
+      const readSet = newlyReadIds.length > 0 ? new Set(newlyReadIds) : null;
+      if (meta.lastMessage) {
+        if (!Array.isArray(meta.lastMessage.readBy)) {
+          const matchingMsg = messages.find((m) => m.id === meta.lastMessage.id);
+          meta.lastMessage.readBy = matchingMsg && Array.isArray(matchingMsg.readBy)
+            ? matchingMsg.readBy.slice()
+            : (meta.lastMessage.sender ? [meta.lastMessage.sender] : []);
+          metaDirty = true;
+        }
+        if ((readSet && readSet.has(meta.lastMessage.id)) || !meta.lastMessage.readBy.includes(username)) {
+          if (!meta.lastMessage.readBy.includes(username)) {
+            meta.lastMessage.readBy.push(username);
+            metaDirty = true;
+          }
+        }
+      }
+      if (meta.lastMessageByUser && typeof meta.lastMessageByUser === 'object') {
+        for (const uKey of Object.keys(meta.lastMessageByUser)) {
+          const lm = meta.lastMessageByUser[uKey];
+          if (lm && readSet && readSet.has(lm.id)) {
+            if (!Array.isArray(lm.readBy)) lm.readBy = lm.sender ? [lm.sender] : [];
+            if (!lm.readBy.includes(username)) {
+              lm.readBy.push(username);
+              metaDirty = true;
+            }
+          }
+        }
+      }
+      if (metaDirty) {
         await writeJsonAtomic(metaPath, meta);
       }
 

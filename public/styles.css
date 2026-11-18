@@ -1219,6 +1219,28 @@ button, input, textarea {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.chat-row-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.sidebar-read-ticks {
+  font-size: 11px;
+  letter-spacing: -2px;
+  padding-right: 2px;
+  color: var(--text-muted);
+  transition: color 180ms ease;
+}
+.sidebar-read-ticks.read {
+  color: #64D2FF;
+}
+.chat-row.active .sidebar-read-ticks {
+  color: rgba(255, 255, 255, 0.78);
+}
+.chat-row.active .sidebar-read-ticks.read {
+  color: #fff;
+}
 .chat-row-time {
   font-size: 11.5px;
   color: var(--text-muted);
