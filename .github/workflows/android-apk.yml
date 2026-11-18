@@ -3,7 +3,7 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, beta ]
     paths:
       - 'android/**'
       - '.github/workflows/android-apk.yml'
@@ -58,34 +58,88 @@ jobs:
             echo "No GOOGLE_SERVICES_JSON_B64 secret set; building with SSE/JobService notification fallback."
           fi
 
-      - name: Build Signed Release APKs (Standard + Legacy)
-        working-directory: android
-        run: gradle assembleStandardRelease assembleLegacyRelease
+      - name: Configure Release Channel & Gradle Tasks
+        run: |
+          VER=$(grep -E 'versionName\s+"' android/app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$VER" ]; then
+            echo "Error: Could not read versionName from android/app/build.gradle."
+            exit 1
+          fi
 
-      - name: Publish GitHub Release & Upload Both APKs
+          if [ "${{ github.ref_name }}" = "beta" ]; then
+            CHANNEL="beta"
+            TASKS="assembleStandardBetaRelease"
+            if [ ! -f android/app/google-services.json ] || grep -q '"fun\.bitdev\.telechat\.legacy\.beta"' android/app/google-services.json; then
+              TASKS="$TASKS assembleLegacyBetaRelease"
+            else
+              echo "Note: fun.bitdev.telechat.legacy.beta not found in google-services.json; skipping Legacy Beta APK."
+            fi
+          else
+            CHANNEL="stable"
+            if [[ "$VER" == *-beta* ]]; then
+              echo "Error: Stable branch '${{ github.ref_name }}' cannot release beta versionName '${VER}'. Update versionName (e.g. '1.0.14') before pushing/merging to main."
+              exit 1
+            fi
+            TASKS="assembleStandardStableRelease assembleLegacyStableRelease"
+          fi
+
+          {
+            echo "RELEASE_CHANNEL=$CHANNEL"
+            echo "APP_VERSION=$VER"
+            echo "GRADLE_TASKS=$TASKS"
+          } >> "$GITHUB_ENV"
+          echo "Configured channel=$CHANNEL version=$VER tasks=$TASKS"
+
+      - name: Build Signed Release APKs
+        working-directory: android
+        run: gradle $GRADLE_TASKS
+
+      - name: Stage APKs & Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VER=$(grep -E 'versionName\s+"' android/app/build.gradle | sed -E 's/.*"([^"]+)".*/\1/')
-          TAG="v${VER}"
-          STD_APK="android/app/build/outputs/apk/standard/release/VibeRoom-${TAG}.apk"
-          LEG_APK="android/app/build/outputs/apk/legacy/release/VibeRoomCompat-${TAG}.apk"
-          cp android/app/build/outputs/apk/standard/release/app-standard-release.apk "$STD_APK"
-          cp android/app/build/outputs/apk/legacy/release/app-legacy-release.apk "$LEG_APK"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$STD_APK" "$LEG_APK" --clobber
+          mkdir -p dist-apks
+          STD_SRC=$(find android/app/build/outputs/apk -type f -iname '*standard*release.apk' ! -iname '*-unsigned.apk' | head -n 1)
+          LEG_SRC=$(find android/app/build/outputs/apk -type f -iname '*legacy*release.apk' ! -iname '*-unsigned.apk' | head -n 1)
+
+          if [ "$RELEASE_CHANNEL" = "beta" ]; then
+            TAG="beta-v${APP_VERSION}"
+            STD_NAME="VibeRoomBeta-v${APP_VERSION}.apk"
+            LEG_NAME="VibeRoomBetaCompat-v${APP_VERSION}.apk"
+            REL_TITLE="VibeRoom Beta ${TAG}"
+            REL_NOTES="VibeRoom Beta Android ${TAG} (connects to https://betachat.bitdev.fun; installs side-by-side with Stable VibeRoom)"
+            REL_FLAGS="--prerelease"
           else
-            gh release create "$TAG" "$STD_APK" "$LEG_APK" --title "VibeRoom ${TAG}" --notes "VibeRoom Android ${TAG} (includes VibeRoom-${TAG}.apk for Android 7+ and VibeRoomCompat-${TAG}.apk for Android 5.0–10 / older devices)" --latest
+            TAG="v${APP_VERSION}"
+            STD_NAME="VibeRoom-${TAG}.apk"
+            LEG_NAME="VibeRoomCompat-${TAG}.apk"
+            REL_TITLE="VibeRoom ${TAG}"
+            REL_NOTES="VibeRoom Android ${TAG} (includes ${STD_NAME} for Android 7+ and ${LEG_NAME} for Android 5.0–10 / older devices)"
+            REL_FLAGS="--latest"
           fi
 
-      - name: Upload VibeRoom Standard APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: VibeRoom-Standard-APK
-          path: android/app/build/outputs/apk/standard/release/app-standard-release.apk
+          ASSETS=()
+          if [ -n "$STD_SRC" ] && [ -f "$STD_SRC" ]; then
+            cp "$STD_SRC" "dist-apks/$STD_NAME"
+            ASSETS+=("dist-apks/$STD_NAME")
+          fi
+          if [ -n "$LEG_SRC" ] && [ -f "$LEG_SRC" ]; then
+            cp "$LEG_SRC" "dist-apks/$LEG_NAME"
+            ASSETS+=("dist-apks/$LEG_NAME")
+          fi
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "Error: No signed release APKs found."
+            exit 1
+          fi
 
-      - name: Upload VibeRoom Legacy APK Artifact
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --title "$REL_TITLE" --notes "$REL_NOTES" $REL_FLAGS
+          fi
+
+      - name: Upload Built APKs Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VibeRoom-Legacy-APK
-          path: android/app/build/outputs/apk/legacy/release/app-legacy-release.apk
+          name: VibeRoom-${{ github.ref_name }}-APKs
+          path: dist-apks/*.apk

@@ -452,7 +452,7 @@ public class MessageService extends Service {
 
         // 4. Decline action button -> background broadcast receiver (no Activity needed)
         Intent declineIntent = new Intent(ctx, CallActionReceiver.class);
-        declineIntent.setAction(CallActionReceiver.ACTION_DECLINE_CALL);
+        declineIntent.setAction(CallActionReceiver.getDeclineAction(ctx));
         if (callId != null && !callId.isEmpty()) declineIntent.putExtra(MainActivity.EXTRA_CALL_ID, callId);
         PendingIntent declinePi = PendingIntent.getBroadcast(ctx, CALL_NOTIF_ID + 3, declineIntent, piFlags);
 

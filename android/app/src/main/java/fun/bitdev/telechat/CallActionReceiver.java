@@ -12,12 +12,14 @@ import java.nio.charset.StandardCharsets;
 
 public class CallActionReceiver extends BroadcastReceiver {
 
-    public static final String ACTION_DECLINE_CALL = "fun.bitdev.telechat.ACTION_DECLINE_CALL";
+    public static String getDeclineAction(Context ctx) {
+        return ctx.getPackageName() + ".ACTION_DECLINE_CALL";
+    }
 
     @Override
     public void onReceive(Context context, Intent intent) {
         if (context == null || intent == null) return;
-        if (!ACTION_DECLINE_CALL.equals(intent.getAction())) return;
+        if (!getDeclineAction(context).equals(intent.getAction())) return;
 
         String callId = intent.getStringExtra(MainActivity.EXTRA_CALL_ID);
         MessageService.cancelIncomingCallNotification(context, callId);

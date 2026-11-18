@@ -57,6 +57,10 @@ public class UpdateManager {
         "href=[\"']([^\"']*/releases/download/[^\"']+\\.apk)[\"']",
         Pattern.CASE_INSENSITIVE
     );
+    private static final Pattern BETA_TAG_HREF_PATTERN = Pattern.compile(
+        "href=[\"'](?:https://github\\.com)?/[^\"']+/releases/tag/(beta-[^\"'?#]+)[\"']",
+        Pattern.CASE_INSENSITIVE
+    );
 
     private static final class ReleaseMeta {
         final String tag;
@@ -226,6 +230,7 @@ public class UpdateManager {
         try {
             obj.put("currentVersion", getInstalledVersionName());
             obj.put("latestVersion", latestVersion);
+            obj.put("channel", getReleaseChannel());
             obj.put("available", updateAvailable);
             obj.put("status", status);
             obj.put("progress", downloadProgress);
@@ -304,7 +309,7 @@ public class UpdateManager {
                     return;
                 }
 
-                String cleanRemote = release.tag.replaceFirst("^[vV]", "");
+                String cleanRemote = stripVersionPrefix(release.tag);
                 prefs.edit()
                     .putString(KEY_CACHED_VERSION, !cleanRemote.isEmpty() ? cleanRemote : currentVer)
                     .putString(KEY_CACHED_APK_URL, release.apkUrl)
@@ -388,10 +393,55 @@ public class UpdateManager {
         return "VibeRoom";
     }
 
+    private String getReleaseChannel() {
+        try {
+            String ch = ctx.getString(R.string.release_channel);
+            if ("beta".equalsIgnoreCase(ch)) return "beta";
+        } catch (Exception ignored) {
+        }
+        return "stable";
+    }
+
+    private boolean isBetaChannel() {
+        return "beta".equals(getReleaseChannel());
+    }
+
+    private static String stripVersionPrefix(String tag) {
+        if (tag == null) return "";
+        return tag.trim().replaceFirst("^(?i)(?:beta-)?v?", "");
+    }
+
+    private static boolean isReleaseForChannel(JSONObject rel, boolean betaChannel) {
+        if (rel == null || rel.optBoolean("draft", false)) return false;
+        String tag = rel.optString("tag_name", "").trim();
+        if (tag.isEmpty()) return false;
+        boolean isBetaTag = tag.toLowerCase().startsWith("beta-");
+        boolean isPrerelease = rel.optBoolean("prerelease", false);
+        return betaChannel ? (isPrerelease || isBetaTag) : (!isPrerelease && !isBetaTag);
+    }
+
+    private static JSONObject selectBetaReleaseFromArray(JSONArray releases, String expectedPrefix) {
+        if (releases == null) return null;
+        JSONObject fallback = null;
+        for (int i = 0; i < releases.length(); i++) {
+            JSONObject rel = releases.optJSONObject(i);
+            if (!isReleaseForChannel(rel, true)) continue;
+            if (fallback == null) fallback = rel;
+            ReleaseMeta parsed = parseReleaseJson(rel, expectedPrefix);
+            if (!parsed.apkUrl.isEmpty()) {
+                return rel;
+            }
+        }
+        return fallback;
+    }
+
     private ReleaseMeta fetchLatestReleaseViaApi(String repo, SharedPreferences prefs) throws Exception {
         HttpURLConnection conn = null;
+        boolean betaChannel = isBetaChannel();
+        String expectedPrefix = getApkAssetPrefix();
         try {
-            URL url = new URL("https://api.github.com/repos/" + repo + "/releases/latest");
+            String apiPath = betaChannel ? "/releases?per_page=20" : "/releases/latest";
+            URL url = new URL("https://api.github.com/repos/" + repo + apiPath);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setRequestProperty("Accept", "application/vnd.github+json");
@@ -405,9 +455,11 @@ public class UpdateManager {
             conn.setReadTimeout(10000);
 
             int code = conn.getResponseCode();
-            String expectedPrefix = getApkAssetPrefix();
             if (code == HttpURLConnection.HTTP_NOT_MODIFIED && !cachedJson.isEmpty()) {
-                return parseReleaseJson(new JSONObject(cachedJson), expectedPrefix);
+                JSONObject rel = new JSONObject(cachedJson);
+                return isReleaseForChannel(rel, betaChannel)
+                    ? parseReleaseJson(rel, expectedPrefix)
+                    : new ReleaseMeta("", "", "", "", 0);
             }
             if (code == 404) {
                 return new ReleaseMeta("", "", "", "", 0);
@@ -432,21 +484,52 @@ public class UpdateManager {
             }
 
             String body = readStream(conn.getInputStream());
-            JSONObject rel = new JSONObject(body);
+            JSONObject selected = betaChannel
+                ? selectBetaReleaseFromArray(new JSONArray(body), expectedPrefix)
+                : new JSONObject(body);
+
+            String jsonToCache = selected != null ? selected.toString() : "{}";
             String etag = conn.getHeaderField("ETag");
-            SharedPreferences.Editor editor = prefs.edit().putString(KEY_CACHED_RELEASE_JSON, body);
+            SharedPreferences.Editor editor = prefs.edit().putString(KEY_CACHED_RELEASE_JSON, jsonToCache);
             if (etag != null && !etag.trim().isEmpty()) {
                 editor.putString(KEY_LAST_ETAG, etag.trim());
             }
             editor.remove(KEY_API_BLOCKED_UNTIL).apply();
 
-            return parseReleaseJson(rel, expectedPrefix);
+            if (selected == null || !isReleaseForChannel(selected, betaChannel)) {
+                return new ReleaseMeta("", "", "", "", 0);
+            }
+            return parseReleaseJson(selected, expectedPrefix);
         } finally {
             if (conn != null) conn.disconnect();
         }
     }
 
-    private ReleaseMeta fetchLatestReleaseViaWeb(String repo, SharedPreferences prefs) throws Exception {
+    private String resolveWebReleaseTag(String repo, boolean betaChannel) throws Exception {
+        if (betaChannel) {
+            HttpURLConnection conn = null;
+            String releasesUrl = "https://github.com/" + repo + "/releases";
+            try {
+                conn = openFollowingRedirects(releasesUrl, 3);
+                int code = conn.getResponseCode();
+                if (code == 404) return "";
+                if (code != 200) {
+                    throw new Exception("GitHub returned HTTP " + code);
+                }
+                String html = readStream(conn.getInputStream());
+                Matcher m = BETA_TAG_HREF_PATTERN.matcher(html);
+                while (m.find()) {
+                    String rawTag = m.group(1);
+                    if (rawTag != null && !rawTag.trim().isEmpty()) {
+                        return URLDecoder.decode(rawTag, "UTF-8").trim();
+                    }
+                }
+                return "";
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
+        }
+
         HttpURLConnection conn = null;
         String latestUrl = "https://github.com/" + repo + "/releases/latest";
         try {
@@ -459,7 +542,7 @@ public class UpdateManager {
 
             int code = conn.getResponseCode();
             if (code == 404) {
-                return new ReleaseMeta("", "", "", "", 0);
+                return "";
             }
 
             String location = null;
@@ -478,43 +561,53 @@ public class UpdateManager {
             int tagMarker = resolvedLocation.indexOf("/releases/tag/");
             if (tagMarker < 0) {
                 // Redirected to /releases when repository has no published releases yet
-                return new ReleaseMeta("", "", "", "", 0);
+                return "";
             }
 
             String rawTag = resolvedLocation.substring(tagMarker + "/releases/tag/".length()).split("[?#]")[0];
             String tag = URLDecoder.decode(rawTag, "UTF-8").trim();
-            if (tag.isEmpty()) {
-                return new ReleaseMeta("", "", "", "", 0);
+            if (tag.toLowerCase().startsWith("beta-")) {
+                return "";
             }
-
-            String encodedTag = URLEncoder.encode(tag, "UTF-8").replace("+", "%20");
-            String htmlUrl = "https://github.com/" + repo + "/releases/tag/" + encodedTag;
-            String notes = "";
-            long apkSize = 0;
-            String expectedPrefix = getApkAssetPrefix();
-
-            String cachedJson = prefs.getString(KEY_CACHED_RELEASE_JSON, "");
-            if (!cachedJson.isEmpty()) {
-                try {
-                    ReleaseMeta cached = parseReleaseJson(new JSONObject(cachedJson), expectedPrefix);
-                    if (tag.equals(cached.tag)) {
-                        notes = cached.notes;
-                        apkSize = cached.apkSize;
-                    }
-                } catch (Exception ignored) {
-                }
-            }
-
-            String apkUrl = findApkAssetViaWeb(repo, encodedTag, expectedPrefix);
-            return new ReleaseMeta(tag, notes, htmlUrl, apkUrl, apkSize);
+            return tag;
         } finally {
             if (conn != null) conn.disconnect();
         }
     }
 
+    private ReleaseMeta fetchLatestReleaseViaWeb(String repo, SharedPreferences prefs) throws Exception {
+        String tag = resolveWebReleaseTag(repo, isBetaChannel());
+        if (tag.isEmpty()) {
+            return new ReleaseMeta("", "", "", "", 0);
+        }
+
+        String encodedTag = URLEncoder.encode(tag, "UTF-8").replace("+", "%20");
+        String htmlUrl = "https://github.com/" + repo + "/releases/tag/" + encodedTag;
+        String notes = "";
+        long apkSize = 0;
+        String expectedPrefix = getApkAssetPrefix();
+
+        String cachedJson = prefs.getString(KEY_CACHED_RELEASE_JSON, "");
+        if (!cachedJson.isEmpty()) {
+            try {
+                ReleaseMeta cached = parseReleaseJson(new JSONObject(cachedJson), expectedPrefix);
+                if (tag.equals(cached.tag)) {
+                    notes = cached.notes;
+                    apkSize = cached.apkSize;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        String apkUrl = findApkAssetViaWeb(repo, encodedTag, expectedPrefix);
+        return new ReleaseMeta(tag, notes, htmlUrl, apkUrl, apkSize);
+    }
+
     private static boolean matchesVariantApk(String lowerName, String expectedPrefix) {
         if (!lowerName.endsWith(".apk")) return false;
         String lowerPrefix = expectedPrefix.toLowerCase();
+        boolean wantBeta = lowerPrefix.contains("beta");
+        if (wantBeta != lowerName.contains("beta")) return false;
         if (lowerName.startsWith(lowerPrefix)) return true;
         // Legacy/Compat flavor must only install compat/legacy APKs; standard flavor skips them
         if (lowerPrefix.contains("compat") || lowerPrefix.contains("legacy")) {
@@ -548,7 +641,7 @@ public class UpdateManager {
                 if (conn != null) conn.disconnect();
             }
         }
-        String cleanVer = encodedTag.replaceFirst("^[vV]", "");
+        String cleanVer = stripVersionPrefix(encodedTag);
         return "https://github.com/" + repo + "/releases/download/" + encodedTag + "/" + expectedPrefix + cleanVer + ".apk";
     }
 
@@ -760,8 +853,31 @@ public class UpdateManager {
     }
 
     public static int compareVersions(String a, String b) {
-        String[] pa = String.valueOf(a).replaceAll("[^0-9.]", "").split("\\.");
-        String[] pb = String.valueOf(b).replaceAll("[^0-9.]", "").split("\\.");
+        String ca = stripVersionPrefix(a);
+        String cb = stripVersionPrefix(b);
+        int dashA = ca.indexOf('-');
+        int dashB = cb.indexOf('-');
+        String baseA = dashA >= 0 ? ca.substring(0, dashA) : ca;
+        String baseB = dashB >= 0 ? cb.substring(0, dashB) : cb;
+
+        int baseCmp = compareNumericSegments(baseA, baseB);
+        if (baseCmp != 0) return baseCmp;
+
+        String preA = dashA >= 0 ? ca.substring(dashA + 1).trim() : "";
+        String preB = dashB >= 0 ? cb.substring(dashB + 1).trim() : "";
+        if (preA.isEmpty() && preB.isEmpty()) return 0;
+        // Stable release (no suffix) is newer than any pre-release of the same base version.
+        if (preA.isEmpty()) return 1;
+        if (preB.isEmpty()) return -1;
+
+        int preCmp = compareNumericSegments(preA, preB);
+        if (preCmp != 0) return preCmp;
+        return preA.compareToIgnoreCase(preB);
+    }
+
+    private static int compareNumericSegments(String a, String b) {
+        String[] pa = a.replaceAll("[^0-9]+", " ").trim().split("\\s+");
+        String[] pb = b.replaceAll("[^0-9]+", " ").trim().split("\\s+");
         int len = Math.max(pa.length, pb.length);
         for (int i = 0; i < len; i++) {
             int va = (i < pa.length && !pa[i].isEmpty()) ? parseIntSafe(pa[i]) : 0;

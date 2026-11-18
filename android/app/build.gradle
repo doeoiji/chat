@@ -15,28 +15,47 @@ android {
         applicationId "fun.bitdev.telechat"
         minSdk 24
         targetSdk 35
-        versionCode 14
-        versionName "1.0.13"
+        versionCode 15
+        versionName "1.0.14-beta.1"
     }
 
-    flavorDimensions "compat"
+    flavorDimensions "compat", "channel"
     productFlavors {
         standard {
             dimension "compat"
             applicationId "fun.bitdev.telechat"
             minSdk 24
             targetSdk 35
-            resValue "string", "app_name", "VibeRoom"
-            resValue "string", "apk_asset_prefix", "VibeRoom-v"
         }
         legacy {
             dimension "compat"
             applicationId "fun.bitdev.telechat.legacy"
             minSdk 21
             targetSdk 29
-            resValue "string", "app_name", "VibeRoom Legacy"
-            resValue "string", "apk_asset_prefix", "VibeRoomCompat-v"
         }
+        stable {
+            dimension "channel"
+        }
+        beta {
+            dimension "channel"
+            applicationIdSuffix ".beta"
+        }
+    }
+
+    applicationVariants.configureEach { variant ->
+        def flavorNames = variant.productFlavors.collect { it.name }
+        boolean isLegacy = flavorNames.contains("legacy")
+        boolean isBeta = flavorNames.contains("beta")
+
+        String appName = isBeta ? (isLegacy ? "VibeRoom Beta Legacy" : "VibeRoom Beta") : (isLegacy ? "VibeRoom Legacy" : "VibeRoom")
+        String assetPrefix = isBeta ? (isLegacy ? "VibeRoomBetaCompat-v" : "VibeRoomBeta-v") : (isLegacy ? "VibeRoomCompat-v" : "VibeRoom-v")
+        String appUrl = isBeta ? "https://betachat.bitdev.fun" : "https://chat.bitdev.fun"
+        String releaseChannel = isBeta ? "beta" : "stable"
+
+        variant.resValue "string", "app_name", appName
+        variant.resValue "string", "apk_asset_prefix", assetPrefix
+        variant.resValue "string", "app_url", appUrl
+        variant.resValue "string", "release_channel", releaseChannel
     }
 
     signingConfigs {
