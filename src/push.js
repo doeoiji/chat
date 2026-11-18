@@ -357,12 +357,44 @@ function createPushService({ config, storage, transportFetch = null }) {
 
   function formatMessagePreview(message, senderProfile, meta) {
     const senderName = (senderProfile && (senderProfile.displayName || senderProfile.username)) || message.sender;
+    const isSecret = Boolean((meta && meta.type === 'secret') || (message.chatId && String(message.chatId).startsWith('sec_')));
     const isRoom = meta && (meta.type === 'group' || meta.type === 'channel');
-    const title = isRoom ? `${meta.title || 'Group'} • ${senderName}` : senderName;
+    const title = isSecret ? `🔒 ${senderName}` : (isRoom ? `${meta.title || 'Group'} • ${senderName}` : senderName);
 
     let body = message.text || '';
+    if (isSecret) {
+      if (message.viewOnce) body = 'Sent a View-Once message';
+      else if (message.poll) body = 'Sent a poll';
+      else if (message.game) body = 'Sent a game';
+      else if (message.sticker) body = message.sticker.type === 'gif' ? 'Sent a GIF' : 'Sent a sticker';
+      else if (Array.isArray(message.attachments) && message.attachments[0]) {
+        const a = message.attachments[0];
+        if (message.kind === 'gif' || a.mimeType === 'image/gif' || /\.gif$/i.test(a.originalName || '')) body = 'Sent a GIF';
+        else if (message.kind === 'sticker') body = 'Sent a sticker';
+        else if (a.mimeType && a.mimeType.startsWith('audio/')) body = 'Sent a voice message';
+        else if (a.isImage) body = 'Sent a photo';
+        else if (a.mimeType && a.mimeType.startsWith('video/')) body = 'Sent a video';
+        else body = 'Sent a file';
+      } else {
+        body = 'Sent a message';
+      }
+      return {
+        title,
+        body,
+        tag: message.id,
+        urgency: 'high',
+        data: {
+          chatId: message.chatId,
+          messageId: message.id,
+          sender: message.sender
+        }
+      };
+    }
+
     if (message.viewOnce) {
       body = '🔒 Sent a View-Once message';
+    } else if (message.timed && !message.openedAt) {
+      body = `⏱ Sent a timed message (${message.ttlSeconds || 10}s)`;
     } else if (message.poll) {
       body = `${message.poll.mode === 'quiz' ? '🧠 Quiz' : '📊 Poll'}: ${message.poll.question}`;
     } else if (message.game) {

@@ -275,16 +275,45 @@ public class MessageService extends Service {
                 ? senderProfile.optString("avatarColor", "")
                 : "";
 
-            String body = msg.optString("text", "").trim();
-            if (body.isEmpty()) {
+            String body = "";
+            boolean isSecretChat = chatId.startsWith("sec_");
+            if (isSecretChat) {
+                displayName = "🔒 " + displayName;
+                String kind = msg.optString("kind", "text");
                 JSONArray attachments = msg.optJSONArray("attachments");
-                if (attachments != null && attachments.length() > 0) {
+                if ("sticker".equals(kind) || msg.has("sticker")) {
+                    body = "Sent a sticker";
+                } else if ("gif".equals(kind)) {
+                    body = "Sent a GIF";
+                } else if ("poll".equals(kind)) {
+                    body = "Sent a poll";
+                } else if (attachments != null && attachments.length() > 0) {
                     JSONObject first = attachments.optJSONObject(0);
+                    String mime = first != null ? first.optString("mimeType", "") : "";
                     boolean isImg = first != null && first.optBoolean("isImage", false);
-                    String origName = first != null ? first.optString("originalName", "file") : "file";
-                    body = isImg ? "📷 Sent a photo" : ("📎 " + origName);
+                    if (mime.startsWith("audio/")) body = "Sent a voice message";
+                    else if (mime.startsWith("video/")) body = "Sent a video";
+                    else if (isImg) body = "Sent a photo";
+                    else body = "Sent a file";
                 } else {
-                    body = "New message";
+                    body = "Sent a message";
+                }
+            } else if (msg.optBoolean("viewOnce", false)) {
+                body = "🔒 Sent a View-Once message";
+            } else if (msg.optBoolean("timed", false)) {
+                body = "⏱ Sent a timed message";
+            } else {
+                body = msg.optString("text", "").trim();
+                if (body.isEmpty()) {
+                    JSONArray attachments = msg.optJSONArray("attachments");
+                    if (attachments != null && attachments.length() > 0) {
+                        JSONObject first = attachments.optJSONObject(0);
+                        boolean isImg = first != null && first.optBoolean("isImage", false);
+                        String origName = first != null ? first.optString("originalName", "file") : "file";
+                        body = isImg ? "📷 Sent a photo" : ("📎 " + origName);
+                    } else {
+                        body = "New message";
+                    }
                 }
             }
 

@@ -198,8 +198,14 @@
     toggleInfoBtn: $('toggle-info-btn'),
     callAudioBtn: $('call-audio-btn'),
     callVideoBtn: $('call-video-btn'),
+    chatMoreBtn: $('chat-more-btn'),
+    chatMoreMenu: $('chat-more-menu'),
+    chatMoreSecretBtn: $('chat-more-secret-btn'),
+    chatMoreSecretLabel: $('chat-more-secret-label'),
     openGamesBtn: $('open-games-btn'),
     openPollBtn: $('open-poll-btn'),
+    secretChatBar: $('secret-chat-bar'),
+    secretTimerSelect: $('secret-timer-select'),
 
     chatSearchBar: $('chat-search-bar'),
     chatSearchInput: $('chat-search-input'),
@@ -279,6 +285,7 @@
     infoPinChatBtn: $('info-pin-chat-btn'),
     infoMuteChatBtn: $('info-mute-chat-btn'),
     infoArchiveChatBtn: $('info-archive-chat-btn'),
+    infoSecretChatBtn: $('info-secret-chat-btn'),
     infoFriendControls: $('info-friend-controls'),
     infoSafetyControls: $('info-safety-controls'),
     infoBlockBtn: $('info-block-btn'),
@@ -428,8 +435,11 @@
     viewOnceModal: $('view-once-modal'),
     viewOnceBackdrop: $('view-once-backdrop'),
     viewOnceClose: $('view-once-close'),
+    viewOnceTitle: $('view-once-title'),
+    viewOnceDesc: $('view-once-desc'),
     viewOnceBody: $('view-once-body'),
     viewOnceDoneBtn: $('view-once-done-btn'),
+    privacyCurtain: $('privacy-curtain'),
     msgContextCard: $('msg-context-card'),
 
     toastContainer: $('toast-container')
@@ -1078,7 +1088,7 @@
       await openSavedMessages();
       return;
     }
-    if (chatId && (String(chatId).startsWith('grp_') || String(chatId).startsWith('chn_'))) {
+    if (chatId && (String(chatId).startsWith('grp_') || String(chatId).startsWith('chn_') || String(chatId).startsWith('sec_'))) {
       await openRoomById(chatId);
       return;
     }
@@ -1371,6 +1381,7 @@
         const blockAct = u.blockedByMe ? 'unblock' : 'block';
         els.userPreviewActions.innerHTML = `
           <button type="button" class="primary-btn sm" data-preview-message="${uname}">Message</button>
+          <button type="button" class="secondary-btn sm" data-preview-secret="${uname}">🔒 Secret Chat</button>
           ${friendBtns}
           <button type="button" class="secondary-btn sm" data-preview-block="${blockAct}" data-preview-user="${uname}">${blockLabel}</button>
           <button type="button" class="danger-btn sm" data-preview-report="${uname}">Report</button>
@@ -2048,6 +2059,7 @@
     const rowsHtml = visibleChats.map((chat) => {
       const isSaved = chat.type === 'saved';
       const isRoom = chat.type === 'group' || chat.type === 'channel';
+      const isSecret = chat.type === 'secret' || String(chat.id).startsWith('sec_');
       const peer = chat.peer;
       const isOnline = !isRoom && !isSaved && peer && (state.onlineUsers.has(peer.username) || peer.online);
       const isActive = state.activeChatId === chat.id;
@@ -2055,11 +2067,13 @@
       const last = chat.lastMessage;
       const draftObj = state.drafts[chat.id];
       const draftText = draftObj && draftObj.text ? draftObj.text.trim() : '';
-      let previewHtml = escapeHtml(isSaved ? 'Personal cloud notes & files' : (isRoom ? (chat.description || 'No messages yet') : 'Start chatting...'));
+      let previewHtml = escapeHtml(isSaved ? 'Personal cloud notes & files' : (isSecret ? '🔒 Self-destructing secret chat' : (isRoom ? (chat.description || 'No messages yet') : 'Start chatting...')));
       if (isTyping) {
         previewHtml = escapeHtml('typing...');
       } else if (draftText) {
-        previewHtml = `<span class="draft-prefix">Draft:</span> ${escapeHtml(draftText.replace(/\s+/g, ' '))}`;
+        previewHtml = isSecret
+          ? `<span class="draft-prefix">Draft:</span> 🔒 Secret message`
+          : `<span class="draft-prefix">Draft:</span> ${escapeHtml(draftText.replace(/\s+/g, ' '))}`;
       } else if (last) {
         const prefix = last.sender === state.me.username
           ? (isSaved ? '' : 'You: ')
@@ -2082,9 +2096,9 @@
       const rowTitle = isSaved ? 'Saved Messages' : (isRoom ? chat.title : (peer.displayName || peer.username));
       const roomTag = isRoom
         ? `<span class="room-kind-tag">${chat.type === 'channel' ? 'Channel' : 'Group'}</span>`
-        : '';
+        : (isSecret ? '<span class="room-kind-tag secret-tag">🔒 Secret</span>' : '');
       const prefBadges = `${chat.isPinned ? '<span class="chat-pin-badge" title="Pinned chat">📌</span>' : ''}${chat.isMuted ? '<span class="chat-mute-badge" title="Muted">🔇</span>' : ''}`;
-      const openAttr = (isRoom || isSaved)
+      const openAttr = (isRoom || isSaved || isSecret)
         ? `data-open-chat="${escapeHtml(chat.id)}"`
         : `data-open-user="${escapeHtml(peer.username)}"`;
       const avatarInner = isSaved
@@ -2395,8 +2409,29 @@
     } else {
       if (els.chatPeerAvatar) els.chatPeerAvatar.classList.remove('saved-avatar');
       renderAvatar(els.chatPeerAvatar, state.activePeer);
-      els.chatPeerName.textContent = state.activePeer.displayName || state.activePeer.username;
+      const isSecretChat = Boolean((chat && chat.type === 'secret') || String(state.activeChatId || '').startsWith('sec_'));
+      const peerLabel = state.activePeer.displayName || state.activePeer.username;
+      els.chatPeerName.textContent = isSecretChat ? `🔒 ${peerLabel}` : peerLabel;
     }
+
+    const isSecretChat = Boolean((chat && chat.type === 'secret') || String(state.activeChatId || '').startsWith('sec_'));
+    if (els.activeChat) {
+      els.activeChat.classList.toggle('is-secret-chat', isSecretChat);
+    }
+    if (els.secretChatBar) {
+      els.secretChatBar.classList.toggle('hidden', !isSecretChat);
+    }
+    if (els.secretTimerSelect && isSecretChat) {
+      els.secretTimerSelect.value = String(Number(chat.secretTimerSec) || 0);
+    }
+    if (els.chatMoreSecretBtn) {
+      els.chatMoreSecretBtn.classList.toggle('hidden', Boolean(isSaved || isRoom || !state.activePeer));
+      if (els.chatMoreSecretLabel) {
+        els.chatMoreSecretLabel.textContent = isSecretChat ? 'Open Normal Chat' : 'Start Secret Chat';
+      }
+    }
+    if (els.chatMoreMenu) els.chatMoreMenu.classList.add('hidden');
+
     syncComposerAccessForActiveChat();
     updateChatHeaderStatus();
     renderPinnedBar();
@@ -2415,6 +2450,7 @@
 
     await markActiveChatRead();
     syncAndroidState();
+    syncScreenCaptureProtection();
     const isMobileOrTouch = typeof window.matchMedia === 'function' &&
       window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
     if (isMobileOrTouch) {
@@ -2455,6 +2491,24 @@
       const data = await api('/api/chats/open', {
         method: 'POST',
         body: { targetUsername }
+      });
+      await applyOpenedChat(data);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function openSecretChatWithUser(targetUsername) {
+    try {
+      if (state.activeChatId) {
+        saveCurrentChatScroll();
+        if (els.messageInput) {
+          saveChatDraft(state.activeChatId, els.messageInput.value);
+        }
+      }
+      const data = await api('/api/chats/open', {
+        method: 'POST',
+        body: { targetUsername, type: 'secret' }
       });
       await applyOpenedChat(data);
     } catch (err) {
@@ -2739,26 +2793,33 @@
 
   function renderAttachmentsHtml(msg) {
     if (!Array.isArray(msg.attachments) || msg.attachments.length === 0) return '';
+    const isProtectedMedia = Boolean(
+      msg.viewOnce ||
+      msg.timed ||
+      msg.secretMsg ||
+      String(state.activeChatId || '').startsWith('sec_')
+    );
+    const dragAttr = isProtectedMedia ? ' draggable="false"' : '';
     const isRichStickerOrGif = !msg.text && msg.attachments.length === 1 && msg.attachments[0].isImage && (msg.kind === 'sticker' || msg.kind === 'gif' || msg.attachments[0].mimeType === 'image/gif');
     const items = msg.attachments.map((att) => {
       if (isRichStickerOrGif) {
         const isGif = msg.kind === 'gif' || att.mimeType === 'image/gif' || /\.gif$/i.test(att.originalName || '');
         return `
-          <div class="msg-rich-media-wrap ${isGif ? 'is-gif' : 'is-sticker'}" data-lightbox-url="${escapeHtml(att.url)}" data-lightbox-name="${escapeHtml(att.originalName)}" data-lightbox-sender="${escapeHtml(msg.sender)}" data-lightbox-caption="">
+          <div class="msg-rich-media-wrap ${isGif ? 'is-gif' : 'is-sticker'}" data-lightbox-url="${escapeHtml(att.url)}" data-lightbox-name="${escapeHtml(att.originalName)}" data-lightbox-sender="${escapeHtml(msg.sender)}" data-lightbox-caption=""${isProtectedMedia ? ' data-lightbox-protected="1"' : ''}>
             ${isGif ? '<span class="vr-gif-badge">GIF</span>' : ''}
-            <img src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" loading="lazy" />
+            <img src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" loading="lazy"${dragAttr} />
           </div>
         `;
       }
       if (att.isImage) {
         return `
-          <div class="msg-image-wrap" data-lightbox-url="${escapeHtml(att.url)}" data-lightbox-name="${escapeHtml(att.originalName)}" data-lightbox-sender="${escapeHtml(msg.sender)}" data-lightbox-caption="${escapeHtml(msg.text || '')}">
-            <img src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" loading="lazy" />
+          <div class="msg-image-wrap" data-lightbox-url="${escapeHtml(att.url)}" data-lightbox-name="${escapeHtml(att.originalName)}" data-lightbox-sender="${escapeHtml(msg.sender)}" data-lightbox-caption="${escapeHtml(msg.text || '')}"${isProtectedMedia ? ' data-lightbox-protected="1"' : ''}>
+            <img src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" loading="lazy"${dragAttr} />
           </div>
         `;
       }
       if (att.mimeType && att.mimeType.startsWith('video/')) {
-        return `<video class="msg-media-player" controls preload="metadata" src="${escapeHtml(att.url)}"></video>`;
+        return `<video class="msg-media-player" controls${isProtectedMedia ? ' controlsList="nodownload"' : ''} preload="metadata" src="${escapeHtml(att.url)}"></video>`;
       }
       if (att.mimeType && att.mimeType.startsWith('audio/')) {
         const isVoice = /^voice-.*\.(webm|ogg|mp4|m4a|wav)$/i.test(String(att.originalName || '')) || Boolean(msg.voiceMeta);
@@ -3167,15 +3228,20 @@
       const editedBadgeHtml = msg.editedAt
         ? `<span class="msg-edited-badge" title="Edited ${escapeHtml(formatTime(msg.editedAt))}">edited</span>`
         : '';
-      const ttlBadgeHtml = msg.expiresAt
-        ? `<span class="msg-ttl-badge" data-expires-at="${escapeHtml(msg.expiresAt)}" title="Self-destruct timer">⏱ ${escapeHtml(formatTtlFromIso(msg.expiresAt))}</span>`
-        : '';
+      let ttlBadgeHtml = '';
+      if (msg.expiresAt) {
+        ttlBadgeHtml = `<span class="msg-ttl-badge" data-expires-at="${escapeHtml(msg.expiresAt)}" title="Self-destruct timer">⏱ ${escapeHtml(formatTtlFromIso(msg.expiresAt))}</span>`;
+      } else if (msg.timed && !msg.openedAt && !msg.viewOnce) {
+        ttlBadgeHtml = `<span class="msg-ttl-badge is-waiting" title="Countdown starts after recipient opens">⏱ ${escapeHtml(formatTtlShort(msg.ttlSeconds || 0))} • waiting</span>`;
+      } else if (msg.secretMsg && Number(msg.ttlSeconds) > 0) {
+        ttlBadgeHtml = `<span class="msg-ttl-badge is-waiting" title="Countdown starts after seen">⏱ ${escapeHtml(formatTtlShort(msg.ttlSeconds))}</span>`;
+      }
       const selectCheckHtml = state.selectMode
         ? `<span class="msg-select-check">${isSelected ? '✓' : ''}</span>`
         : '';
 
       let stickerCardHtml = '';
-      if (msg.sticker && !msg.viewOnce) {
+      if (msg.sticker && !msg.viewOnce && !(msg.timed && !msg.openedAt && !isMine && msg.timedState === 'sealed')) {
         if (window.VibeRoomStickers && typeof window.VibeRoomStickers.renderBubbleHtml === 'function') {
           stickerCardHtml = window.VibeRoomStickers.renderBubbleHtml(msg.sticker);
         } else {
@@ -3220,19 +3286,39 @@
         }
       }
 
+      let timedCardHtml = '';
+      const isSealedTimed = Boolean(!msg.viewOnce && msg.timed && !msg.openedAt && !isMine && msg.timedState === 'sealed');
+      if (isSealedTimed) {
+        const hint = msg.timedHint || {};
+        const typeLabel = hint.isVoice
+          ? 'Voice Note'
+          : (hint.hasImage ? 'Photo' : (hint.isVideo ? 'Video' : (hint.hasFile ? 'File' : 'Secret Message')));
+        const durLabel = formatTtlShort(msg.ttlSeconds || 0);
+        timedCardHtml = `
+          <button type="button" class="view-once-card is-sealed is-timed-sealed" data-open-timed="${escapeHtml(msg.id)}">
+            <span class="view-once-badge">⏱</span>
+            <div class="view-once-meta">
+              <strong>Timed ${escapeHtml(typeLabel)} (${escapeHtml(durLabel)})</strong>
+              <span>Tap to open &amp; start ${escapeHtml(durLabel)} countdown</span>
+            </div>
+          </button>
+        `;
+      }
+
       const isMediaStickerBubble = Boolean(
         !msg.viewOnce &&
+        !isSealedTimed &&
         !msg.text &&
         (stickerCardHtml || (msg.attachments && msg.attachments.length === 1 && msg.attachments[0].isImage && (msg.kind === 'sticker' || msg.kind === 'gif' || msg.attachments[0].mimeType === 'image/gif')))
       );
 
-      const showBodyText = Boolean(!msg.viewOnce && msg.text && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'poll');
+      const showBodyText = Boolean(!msg.viewOnce && !isSealedTimed && msg.text && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'poll');
       const bubbleHtml = `
         <div class="msg-bubble${isMediaStickerBubble ? ' sticker-bubble' : ''}">
           ${fwdHeaderHtml}
           ${senderHeaderHtml}
           ${replyHtml}
-          ${msg.viewOnce ? viewOnceCardHtml : `
+          ${msg.viewOnce ? viewOnceCardHtml : (isSealedTimed ? timedCardHtml : `
             ${stickerCardHtml}
             ${renderAttachmentsHtml(msg)}
             ${gameCardHtml}
@@ -3240,7 +3326,7 @@
             ${pollCardHtml}
             ${showBodyText ? `<div class="msg-text">${linkifyText(msg.text)}</div>` : ''}
             ${renderLinkPreviewHtml(msg)}
-          `}
+          `)}
           ${renderReactionsHtml(msg)}
           <div class="msg-footer">
             ${ttlBadgeHtml}
@@ -3251,10 +3337,11 @@
         </div>
       `;
 
-      const baseClassName = `msg-row ${groupClasses}${state.selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}`;
+      const isProtectedRow = Boolean(msg.viewOnce || msg.timed || msg.secretMsg || String(state.activeChatId || '').startsWith('sec_'));
+      const baseClassName = `msg-row ${groupClasses}${state.selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}${isProtectedRow ? ' privacy-protected-row' : ''}`;
       const timeLabel = formatTime(msg.createdAt);
       const metaSig = `${baseClassName}|${timeLabel}|${isMediaStickerBubble ? '1' : '0'}`;
-      const mediaSig = JSON.stringify([msg.kind || '', msg.sticker || null, msg.attachments || null, msg.voiceMeta || null, msg.viewOnce ? (msg.consumed ? '2' : (msg.viewOnceState || '1')) : '0']);
+      const mediaSig = JSON.stringify([msg.kind || '', msg.sticker || null, msg.attachments || null, msg.voiceMeta || null, msg.viewOnce ? (msg.consumed ? '2' : (msg.viewOnceState || '1')) : '0', msg.timed ? (msg.openedAt ? 'open' : (msg.timedState || '1')) : '0']);
       const contentSig = JSON.stringify([
         msg.text || '',
         msg.editedAt || '',
@@ -3267,6 +3354,11 @@
         msg.viewOnce || false,
         msg.consumed || false,
         msg.viewedBy || null,
+        msg.timed || false,
+        msg.openedAt || '',
+        msg.timedState || '',
+        msg.secretMsg || false,
+        msg.ttlSeconds || 0,
         msg.expiresAt || '',
         senderHeaderHtml
       ]);
@@ -3377,6 +3469,7 @@
         if (!state.userScrolledSinceOpen) instantScrollToBottom();
       });
     }
+    syncScreenCaptureProtection();
   }
 
   function isNearBottom(threshold = 140) {
@@ -4111,6 +4204,13 @@
           els.infoArchiveChatBtn.textContent = isArchivedChat ? '📤 Unarchive' : '📦 Archive';
           els.infoArchiveChatBtn.classList.toggle('active', isArchivedChat);
         }
+        if (els.infoSecretChatBtn) {
+          const isSecretChat = Boolean(chatObj.type === 'secret' || String(state.activeChatId || '').startsWith('sec_'));
+          const showSecretToggle = Boolean(!isSaved && !state.activeRoom && state.activePeer && !state.activePeer.deleted);
+          els.infoSecretChatBtn.classList.toggle('hidden', !showSecretToggle);
+          els.infoSecretChatBtn.textContent = isSecretChat ? '💬 Normal Chat' : '🔒 Secret Chat';
+          els.infoSecretChatBtn.classList.toggle('active', isSecretChat);
+        }
       }
     }
 
@@ -4319,11 +4419,19 @@
     }
   }
 
-  function openLightbox(url, name, sender, caption = '') {
+  function openLightbox(url, name, sender, caption = '', isProtected = false) {
+    state.lightboxProtected = Boolean(isProtected);
     els.lightboxImg.src = url;
+    els.lightboxImg.draggable = !isProtected;
     els.lightboxMeta.textContent = `${name || 'Image'}${sender ? ` • from @${sender}` : ''}`;
-    els.lightboxDownload.href = `${url}?download=1`;
-    els.lightboxDownload.download = name || 'image';
+    if (els.lightboxDownload) {
+      els.lightboxDownload.href = isProtected ? '#' : `${url}?download=1`;
+      els.lightboxDownload.download = name || 'image';
+      els.lightboxDownload.classList.toggle('hidden', Boolean(isProtected));
+    }
+    if (els.lightboxModal) {
+      els.lightboxModal.classList.toggle('privacy-protected-modal', Boolean(isProtected));
+    }
     if (caption) {
       els.lightboxCaption.textContent = caption;
       els.lightboxCaption.classList.remove('hidden');
@@ -4331,11 +4439,15 @@
       els.lightboxCaption.classList.add('hidden');
     }
     els.lightboxModal.classList.remove('hidden');
+    syncScreenCaptureProtection();
   }
 
   function closeLightbox() {
+    state.lightboxProtected = false;
     els.lightboxModal.classList.add('hidden');
+    if (els.lightboxModal) els.lightboxModal.classList.remove('privacy-protected-modal');
     els.lightboxImg.src = '';
+    syncScreenCaptureProtection();
   }
 
   function syncProfileAvatarControls() {
@@ -4425,18 +4537,47 @@
       const isCallLog = data.message.kind === 'call' && data.message.call;
       const isSilentCallLog = isCallLog && data.message.call.status !== 'missed';
       const isIncoming = !isSystem && !isSilentCallLog && data.message.sender !== state.me.username;
-      const senderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
+      const isSecretMsg = Boolean(String(data.chatId || '').startsWith('sec_') || (data.meta && data.meta.type === 'secret'));
+      const rawSenderName = (data.senderProfile && data.senderProfile.displayName) || data.message.sender;
+      const senderName = isSecretMsg ? `🔒 ${rawSenderName}` : rawSenderName;
       const senderAvatarUrl = (data.senderProfile && data.senderProfile.avatarUrl) || '';
       const senderAvatarColor = (data.senderProfile && data.senderProfile.avatarColor) || '';
-      const bodyPreview = data.message.kind === 'game'
-        ? `🎮 ${(data.message.game && data.message.game.title) || 'Mini-Game'}`
-        : (isCallLog
-          ? (data.message.text || 'Call')
-          : (data.message.text
-            ? data.message.text.slice(0, 120)
-            : (data.message.attachments && data.message.attachments[0]
-              ? (data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`)
-              : 'New message')));
+
+      let bodyPreview;
+      if (isSecretMsg) {
+        const m = data.message;
+        if (m.kind === 'poll') bodyPreview = 'Created a poll';
+        else if (m.kind === 'game') bodyPreview = 'Started a mini-game';
+        else if (m.kind === 'call') bodyPreview = 'Call update';
+        else if (m.kind === 'sticker' || m.sticker) bodyPreview = 'Sent a sticker';
+        else if (m.kind === 'gif') bodyPreview = 'Sent a GIF';
+        else if (Array.isArray(m.attachments) && m.attachments[0]) {
+          const a = m.attachments[0];
+          const mime = String(a.mimeType || '').toLowerCase();
+          const name = String(a.originalName || '').toLowerCase();
+          if (mime === 'image/gif' || name.endsWith('.gif')) bodyPreview = 'Sent a GIF';
+          else if (a.isImage || mime.startsWith('image/')) bodyPreview = 'Sent a photo';
+          else if (mime.startsWith('video/')) bodyPreview = 'Sent a video';
+          else if (mime.startsWith('audio/')) bodyPreview = (m.voiceMeta || /^voice-/i.test(name)) ? 'Sent a voice message' : 'Sent an audio clip';
+          else bodyPreview = 'Sent a file';
+        } else {
+          bodyPreview = 'Sent a message';
+        }
+      } else if (data.message.viewOnce) {
+        bodyPreview = '🔒 Sent a View-Once message';
+      } else if (data.message.timed && !data.message.openedAt) {
+        bodyPreview = '⏱ Sent a timed message';
+      } else if (data.message.kind === 'game') {
+        bodyPreview = `🎮 ${(data.message.game && data.message.game.title) || 'Mini-Game'}`;
+      } else if (isCallLog) {
+        bodyPreview = data.message.text || 'Call';
+      } else if (data.message.text) {
+        bodyPreview = data.message.text.slice(0, 120);
+      } else if (data.message.attachments && data.message.attachments[0]) {
+        bodyPreview = data.message.attachments[0].isImage ? '📷 Sent a photo' : `📎 ${data.message.attachments[0].originalName}`;
+      } else {
+        bodyPreview = 'New message';
+      }
 
       const existingChatObj = state.chats.find((c) => c.id === data.chatId);
       if (existingChatObj && !isSystem) {
@@ -4656,6 +4797,13 @@
           syncComposerAccessForActiveChat();
           updateChatHeaderStatus();
           if (state.infoOpen) renderInfoDrawer();
+        } else if (state.activeChatId === data.chatId && state.activeChatMeta) {
+          if (typeof data.chat.secretTimerSec === 'number') {
+            state.activeChatMeta.secretTimerSec = data.chat.secretTimerSec;
+            if (els.secretTimerSelect) {
+              els.secretTimerSelect.value = String(data.chat.secretTimerSec || 0);
+            }
+          }
         }
         renderSidebar();
       } else {
@@ -5611,6 +5759,13 @@
           await openChatWithUser(uname);
           return;
         }
+        const secretBtn = e.target.closest('[data-preview-secret]');
+        if (secretBtn) {
+          const uname = secretBtn.dataset.previewSecret;
+          closeUserPreviewModal();
+          await openSecretChatWithUser(uname);
+          return;
+        }
         const friendBtn = e.target.closest('[data-friend-action]');
         if (friendBtn) {
           const uname = friendBtn.dataset.friendUser;
@@ -5996,9 +6151,14 @@
       saveCurrentChatScroll();
       els.appShell.classList.remove('mobile-chat-open');
       state.activeChatId = null;
+      state.activeChatMeta = null;
       state.activePeer = null;
       state.activeRoom = null;
+      if (els.activeChat) els.activeChat.classList.remove('is-secret-chat');
+      if (els.secretChatBar) els.secretChatBar.classList.add('hidden');
+      if (els.chatMoreMenu) els.chatMoreMenu.classList.add('hidden');
       syncAndroidState();
+      syncScreenCaptureProtection();
       renderSidebar();
     });
 
@@ -6266,7 +6426,10 @@
         }
       ];
 
-      if (isMine && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'sticker' && msg.kind !== 'gif' && msg.kind !== 'poll' && !msg.sticker && !msg.viewOnce) {
+      const isSealedTimedMsg = Boolean(msg.timed && !msg.openedAt && !isMine && msg.timedState === 'sealed');
+      const isSecretChatActive = Boolean(String(state.activeChatId || '').startsWith('sec_') || (state.activeChatMeta && state.activeChatMeta.type === 'secret'));
+
+      if (isMine && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'sticker' && msg.kind !== 'gif' && msg.kind !== 'poll' && !msg.sticker && !msg.viewOnce && !msg.timed) {
         items.push({
           action: 'edit',
           label: 'Edit',
@@ -6274,7 +6437,7 @@
         });
       }
 
-      if (!isChannelReadOnly && msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce) {
+      if (!isChannelReadOnly && msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce && !isSealedTimedMsg) {
         items.push({
           action: isCurrentlyPinned ? 'unpin' : 'pin',
           label: isCurrentlyPinned ? 'Unpin' : 'Pin',
@@ -6282,7 +6445,7 @@
         });
       }
 
-      if (msg.text && !msg.viewOnce) {
+      if (msg.text && !msg.viewOnce && !isSealedTimedMsg) {
         items.push({
           action: 'copy',
           label: 'Copy',
@@ -6290,12 +6453,14 @@
         });
       }
 
-      if (msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce) {
+      if (msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce && !isSealedTimedMsg && !isSecretChatActive) {
         items.push({
           action: 'forward',
           label: 'Forward',
           icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>'
         });
+      }
+      if (msg.kind !== 'game' && msg.kind !== 'call' && !msg.viewOnce && !isSealedTimedMsg) {
         items.push({
           action: 'select',
           label: 'Select',
@@ -6303,7 +6468,7 @@
         });
       }
 
-      if (firstAtt) {
+      if (firstAtt && !isSealedTimedMsg) {
         items.push({
           action: firstAtt.isImage ? 'open-media' : 'download-file',
           label: firstAtt.isImage ? 'View Photo' : 'Download File',
@@ -6424,7 +6589,8 @@
           lightboxTrigger.dataset.lightboxUrl,
           lightboxTrigger.dataset.lightboxName,
           lightboxTrigger.dataset.lightboxSender,
-          lightboxTrigger.dataset.lightboxCaption || ''
+          lightboxTrigger.dataset.lightboxCaption || '',
+          lightboxTrigger.dataset.lightboxProtected === '1'
         );
         return;
       }
@@ -6483,6 +6649,13 @@
       if (viewOnceBtn && state.activeChatId) {
         e.stopPropagation();
         await openViewOnceById(viewOnceBtn.dataset.openViewOnce);
+        return;
+      }
+
+      const timedBtn = e.target.closest('[data-open-timed]');
+      if (timedBtn && state.activeChatId) {
+        e.stopPropagation();
+        await openTimedById(timedBtn.dataset.openTimed);
         return;
       }
 
@@ -6762,6 +6935,65 @@
       });
     }
 
+    if (els.infoSecretChatBtn) {
+      els.infoSecretChatBtn.addEventListener('click', async () => {
+        if (!state.activePeer || !state.activePeer.username) return;
+        const isSecretChat = String(state.activeChatId || '').startsWith('sec_') || (state.activeChatMeta && state.activeChatMeta.type === 'secret');
+        if (isSecretChat) {
+          await openChatWithUser(state.activePeer.username);
+        } else {
+          await openSecretChatWithUser(state.activePeer.username);
+        }
+      });
+    }
+
+    if (els.chatMoreBtn && els.chatMoreMenu) {
+      els.chatMoreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        els.chatMoreMenu.classList.toggle('hidden');
+      });
+      els.chatMoreMenu.addEventListener('click', (e) => {
+        if (e.target.closest('.chat-more-item')) {
+          els.chatMoreMenu.classList.add('hidden');
+        }
+      });
+      document.addEventListener('click', (e) => {
+        if (!els.chatMoreMenu.classList.contains('hidden') && !e.target.closest('.chat-more-anchor')) {
+          els.chatMoreMenu.classList.add('hidden');
+        }
+      });
+    }
+
+    if (els.chatMoreSecretBtn) {
+      els.chatMoreSecretBtn.addEventListener('click', async () => {
+        if (!state.activePeer || !state.activePeer.username) return;
+        const isSecretChat = String(state.activeChatId || '').startsWith('sec_') || (state.activeChatMeta && state.activeChatMeta.type === 'secret');
+        if (isSecretChat) {
+          await openChatWithUser(state.activePeer.username);
+        } else {
+          await openSecretChatWithUser(state.activePeer.username);
+        }
+      });
+    }
+
+    if (els.secretTimerSelect) {
+      els.secretTimerSelect.addEventListener('change', async () => {
+        if (!state.activeChatId) return;
+        const timerSec = Math.max(0, Number(els.secretTimerSelect.value) || 0);
+        try {
+          const data = await api(`/api/chats/${encodeURIComponent(state.activeChatId)}/secret-timer`, {
+            method: 'POST',
+            body: { timerSec }
+          });
+          if (state.activeChatMeta) state.activeChatMeta.secretTimerSec = Number(data.secretTimerSec) || 0;
+          const label = timerSec > 0 ? `${formatTtlShort(timerSec)} after seen` : 'Off';
+          showToast(`Secret chat auto-delete: ${label}`, 'info');
+        } catch (err) {
+          showToast(err.message || 'Unable to update secret timer.', 'error');
+        }
+      });
+    }
+
     if (els.multiCopyBtn) els.multiCopyBtn.addEventListener('click', multiCopySelected);
     if (els.multiForwardBtn) {
       els.multiForwardBtn.addEventListener('click', () => {
@@ -6827,13 +7059,44 @@
       });
     }
 
+    let lastNativeScreenBlock = null;
+    function syncScreenCaptureProtection() {
+      if (typeof document === 'undefined' || !document.body) return;
+      const isSecretChat = Boolean(
+        String(state.activeChatId || '').startsWith('sec_') ||
+        (state.activeChatMeta && state.activeChatMeta.type === 'secret')
+      );
+      const hasVisibleTimedOrSecret = Boolean(
+        state.activeChatId &&
+        Array.isArray(state.messages) &&
+        state.messages.some((m) => m && !m.consumed && (m.viewOnce || m.timed || m.secretMsg || m.expiresAt))
+      );
+      const viewOnceOpen = Boolean(els.viewOnceModal && !els.viewOnceModal.classList.contains('hidden'));
+      const shouldProtect = Boolean(isSecretChat || hasVisibleTimedOrSecret || viewOnceOpen || state.lightboxProtected);
+
+      document.body.classList.toggle('privacy-screen-protected', shouldProtect);
+      if (!shouldProtect && els.privacyCurtain) {
+        els.privacyCurtain.classList.add('hidden');
+      }
+      if (lastNativeScreenBlock !== shouldProtect) {
+        lastNativeScreenBlock = shouldProtect;
+        if (typeof window !== 'undefined' && window.AndroidBridge && typeof window.AndroidBridge.setScreenCaptureBlocked === 'function') {
+          try {
+            window.AndroidBridge.setScreenCaptureBlocked(Boolean(shouldProtect));
+          } catch {
+          }
+        }
+      }
+    }
+
     let activeViewOnceContext = null;
     async function closeAndBurnViewOnceModal() {
       if (els.viewOnceModal) els.viewOnceModal.classList.add('hidden');
       if (els.viewOnceBody) els.viewOnceBody.innerHTML = '';
       const ctx = activeViewOnceContext;
       activeViewOnceContext = null;
-      if (ctx && !ctx.alreadyBurned && ctx.chatId && ctx.msgId) {
+      syncScreenCaptureProtection();
+      if (ctx && !ctx.isTimed && !ctx.alreadyBurned && ctx.chatId && ctx.msgId) {
         try {
           const res = await api(`/api/chats/${encodeURIComponent(ctx.chatId)}/messages/${encodeURIComponent(ctx.msgId)}/view-once/burn`, {
             method: 'POST'
@@ -6860,17 +7123,19 @@
         });
         const revealed = res.message;
         if (!revealed || !els.viewOnceModal || !els.viewOnceBody) return;
-        activeViewOnceContext = { chatId, msgId, alreadyBurned: Boolean(res.consumed) };
+        activeViewOnceContext = { chatId, msgId, alreadyBurned: Boolean(res.consumed), isTimed: false };
+        if (els.viewOnceTitle) els.viewOnceTitle.textContent = '1× View-Once Message';
+        if (els.viewOnceDesc) els.viewOnceDesc.textContent = 'Protected view — closing permanently self-destructs this message.';
 
         const parts = [];
         if (Array.isArray(revealed.attachments)) {
           for (const att of revealed.attachments) {
             if (att.isImage) {
-              parts.push(`<img class="view-once-media" src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" />`);
+              parts.push(`<img class="view-once-media" draggable="false" src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" />`);
             } else if (att.mimeType && att.mimeType.startsWith('video/')) {
-              parts.push(`<video class="view-once-media" controls autoplay src="${escapeHtml(att.url)}"></video>`);
+              parts.push(`<video class="view-once-media" controls controlsList="nodownload" autoplay src="${escapeHtml(att.url)}"></video>`);
             } else if (att.mimeType && att.mimeType.startsWith('audio/')) {
-              parts.push(`<audio class="view-once-audio" controls autoplay src="${escapeHtml(att.url)}"></audio>`);
+              parts.push(`<audio class="view-once-audio" controls controlsList="nodownload" autoplay src="${escapeHtml(att.url)}"></audio>`);
             } else {
               parts.push(`<a class="secondary-btn" href="${escapeHtml(att.url)}&download=1" download="${escapeHtml(att.originalName)}">⬇ ${escapeHtml(att.originalName)}</a>`);
             }
@@ -6881,6 +7146,7 @@
         }
         els.viewOnceBody.innerHTML = parts.join('') || '<div class="vr-hint">Empty View-Once content</div>';
         els.viewOnceModal.classList.remove('hidden');
+        syncScreenCaptureProtection();
 
         if (res.consumed) {
           const idx = state.messages.findIndex((m) => m.id === msgId);
@@ -6892,6 +7158,82 @@
       } catch (err) {
         showToast(err.message || 'Unable to reveal View-Once message.', 'error');
       }
+    }
+
+    async function openTimedById(msgId) {
+      if (!state.activeChatId || !msgId) return;
+      const chatId = state.activeChatId;
+      try {
+        const res = await api(`/api/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(msgId)}/open-timed`, {
+          method: 'POST'
+        });
+        const revealed = res.message;
+        if (!revealed) return;
+        if (state.activeChatId === chatId) {
+          const idx = state.messages.findIndex((m) => m.id === msgId);
+          if (idx >= 0) {
+            state.messages[idx] = revealed;
+          } else {
+            state.messages.push(revealed);
+          }
+          renderMessages(false);
+        }
+      } catch (err) {
+        showToast(err.message || 'Unable to open timed message.', 'error');
+      }
+    }
+
+    // Web screenshot / capture deterrence when secret chats or timed messages are visible
+    if (typeof document.createElement === 'function') {
+      const updateWebPrivacyCurtain = () => {
+        if (!els.privacyCurtain) return;
+        const isProtected = Boolean(document.body && document.body.classList.contains('privacy-screen-protected'));
+        const isNativeApp = Boolean(typeof window !== 'undefined' && window.AndroidBridge && typeof window.AndroidBridge.setScreenCaptureBlocked === 'function');
+        if (!isProtected) {
+          els.privacyCurtain.classList.add('hidden');
+          return;
+        }
+        const unfocused = Boolean(document.hidden || (!isNativeApp && typeof document.hasFocus === 'function' && !document.hasFocus()));
+        els.privacyCurtain.classList.toggle('hidden', !unfocused);
+      };
+      document.addEventListener('visibilitychange', updateWebPrivacyCurtain);
+      if (typeof window.addEventListener === 'function') {
+        window.addEventListener('blur', updateWebPrivacyCurtain);
+        window.addEventListener('focus', updateWebPrivacyCurtain);
+        window.addEventListener('keydown', (e) => {
+          if (!document.body || !document.body.classList.contains('privacy-screen-protected')) return;
+          const k = String(e.key || '');
+          const isPrintScreen = k === 'PrintScreen' || e.keyCode === 44;
+          const isPrint = (e.ctrlKey || e.metaKey) && k.toLowerCase() === 'p';
+          const isMacShot = e.metaKey && e.shiftKey && (k === '3' || k === '4' || k === '5');
+          const isWinSnip = (e.ctrlKey || e.metaKey) && e.shiftKey && k.toLowerCase() === 's';
+          if (isPrintScreen || isPrint || isMacShot || isWinSnip) {
+            e.preventDefault();
+            if (isPrintScreen && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+              navigator.clipboard.writeText('').catch(() => { });
+            }
+            if (els.privacyCurtain) {
+              els.privacyCurtain.classList.remove('hidden');
+              setTimeout(() => updateWebPrivacyCurtain(), 900);
+            }
+            showToast('Screenshots are disabled for secret and self-destructing messages.', 'info');
+          }
+        });
+      }
+      document.addEventListener('contextmenu', (e) => {
+        if (!document.body || !document.body.classList.contains('privacy-screen-protected')) return;
+        if (e.target.closest('.privacy-protected-row, .view-once-modal, .privacy-protected-modal, .active-chat.is-secret-chat')) {
+          if (e.target.closest('img, video, audio, .view-once-media, .msg-text')) {
+            e.preventDefault();
+          }
+        }
+      });
+      document.addEventListener('dragstart', (e) => {
+        if (!document.body || !document.body.classList.contains('privacy-screen-protected')) return;
+        if (e.target.closest('.privacy-protected-row, .view-once-modal, .privacy-protected-modal, .active-chat.is-secret-chat')) {
+          e.preventDefault();
+        }
+      });
     }
 
     if (els.viewOnceBackdrop) els.viewOnceBackdrop.addEventListener('click', closeAndBurnViewOnceModal);
@@ -7618,13 +7960,21 @@
     if (!els.profileModal.classList.contains('hidden')) { closeProfileModal(); return true; }
     if (els.navDrawer.classList.contains('open')) { closeDrawer(); return true; }
     if (state.infoOpen) { toggleInfoDrawer(false); return true; }
+    if (els.chatMoreMenu && !els.chatMoreMenu.classList.contains('hidden')) {
+      els.chatMoreMenu.classList.add('hidden');
+      return true;
+    }
     if (els.appShell.classList.contains('mobile-chat-open')) {
       saveCurrentChatScroll();
       els.appShell.classList.remove('mobile-chat-open');
       state.activeChatId = null;
+      state.activeChatMeta = null;
       state.activePeer = null;
       state.activeRoom = null;
+      if (els.activeChat) els.activeChat.classList.remove('is-secret-chat');
+      if (els.secretChatBar) els.secretChatBar.classList.add('hidden');
       syncAndroidState();
+      syncScreenCaptureProtection();
       renderSidebar();
       return true;
     }
@@ -7640,6 +7990,7 @@
     getEls: () => els,
     api,
     openChatWithUser,
+    openSecretChatWithUser,
     openRoomById,
     openSavedMessages,
     refreshChats,

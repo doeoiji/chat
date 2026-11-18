@@ -2437,7 +2437,7 @@ test('polls, quizzes, game leaderboards, streaks, disappearing messages, view-on
   });
   assert.equal(secondReveal.status, 410);
 
-  // 4. Voice waveform meta & disappearing message auto-expiry
+  // 4. Voice waveform meta & disappearing timed message (countdown starts ONLY after opening)
   const vBoundary = '----VRVoiceBoundary';
   const voiceMetaJson = JSON.stringify({ durationSec: 7, peaks: [18, 45, 82, 60, 25] });
   const vBody = Buffer.concat([
@@ -2453,14 +2453,34 @@ test('polls, quizzes, game leaderboards, streaks, disappearing messages, view-on
     body: vBody
   });
   assert.equal(voiceRes.status, 201);
+  assert.equal(voiceRes.body.message.timed, true);
+  assert.equal(voiceRes.body.message.expiresAt, undefined);
   assert.equal(voiceRes.body.message.voiceMeta.durationSec, 7);
   assert.deepEqual(voiceRes.body.message.voiceMeta.peaks, [18, 45, 82, 60, 25]);
-  assert.ok(voiceRes.body.message.expiresAt);
+  const timedVoiceId = voiceRes.body.message.id;
+  const timedRawUrl = voiceRes.body.message.attachments[0].url;
+
+  // Before opening: recipient sees a sealed timed box, empty attachments, and direct file access is blocked
+  const bobSealedTimed = (await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, { headers: { Cookie: bob.cookie } })).body.messages.find((m) => m.id === timedVoiceId);
+  assert.equal(bobSealedTimed.timedState, 'sealed');
+  assert.equal(bobSealedTimed.attachments.length, 0);
+  const blockedTimedFile = await invokeRouter(handleRequest, timedRawUrl, { headers: { Cookie: bob.cookie } });
+  assert.equal(blockedTimedFile.status, 404);
+
+  // Opening timed message reveals content AND starts the countdown
+  const openTimedRes = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages/${timedVoiceId}/open-timed`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(openTimedRes.status, 200);
+  assert.ok(openTimedRes.body.message.openedAt);
+  assert.ok(openTimedRes.body.message.expiresAt);
+  assert.equal(openTimedRes.body.message.attachments.length, 1);
 
   // Wait > 1.05s -> disappearing message expires and is purged cleanly
   await new Promise((r) => setTimeout(r, 1100));
   const afterExp = await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, { headers: { Cookie: bob.cookie } });
-  assert.equal(afterExp.body.messages.some((m) => m.id === voiceRes.body.message.id), false);
+  assert.equal(afterExp.body.messages.some((m) => m.id === timedVoiceId), false);
 
   // 5. Sidebar lastMessage readBy (sent -> seen ticks outside chat)
   await invokeRouter(handleRequest, `/api/chats/${dmId}/messages`, {
@@ -2476,6 +2496,80 @@ test('polls, quizzes, game leaderboards, streaks, disappearing messages, view-on
   const listSeen = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
   const dmSummaryAfterRead = listSeen.find((c) => c.id === dmId);
   assert.equal(dmSummaryAfterRead.lastMessage.readBy.includes('bob_e'), true);
+
+  // 6. Secret Chat mode: separate sec_ chat, configurable timer, masked sidebar & push previews, countdown starts on peer seen
+  const openSecretRes = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_e', type: 'secret' })
+  });
+  assert.equal(openSecretRes.status, 200);
+  assert.ok(openSecretRes.body.chat.id.startsWith('sec_'));
+  assert.equal(openSecretRes.body.chat.type, 'secret');
+  const secChatId = openSecretRes.body.chat.id;
+  assert.notEqual(secChatId, dmId);
+
+  const setTimerRes = await invokeRouter(handleRequest, `/api/chats/${secChatId}/secret-timer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ timerSec: 1 })
+  });
+  assert.equal(setTimerRes.status, 200);
+  assert.equal(setTimerRes.body.secretTimerSec, 1);
+
+  const secSendRes = await invokeRouter(handleRequest, `/api/chats/${secChatId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Ultra confidential secret text' })
+  });
+  assert.equal(secSendRes.status, 201);
+  const secMsgId = secSendRes.body.message.id;
+  assert.equal(secSendRes.body.message.secretMsg, true);
+  assert.equal(secSendRes.body.message.ttlSeconds, 1);
+  assert.equal(secSendRes.body.message.expiresAt, undefined);
+
+  // Sidebar summary & push formatter MUST NOT leak message content
+  const secChatSummary = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: bob.cookie } })).body.chats.find((c) => c.id === secChatId);
+  assert.equal(secChatSummary.isSecret, true);
+  assert.equal(secChatSummary.lastMessage.preview, 'Sent a message');
+  assert.equal(secChatSummary.lastMessage.preview.includes('Ultra confidential'), false);
+
+  const pushSvc = require('../src/push').createPushService({ config, storage });
+  const pushMask = pushSvc.formatMessagePreview(
+    { id: secMsgId, chatId: secChatId, sender: 'alice_e', text: 'Ultra confidential secret text' },
+    { displayName: 'Alice', username: 'alice_e' },
+    { type: 'secret', title: '' }
+  );
+  assert.equal(pushMask.title, '🔒 Alice');
+  assert.equal(pushMask.body, 'Sent a message');
+
+  // Forwarding from Secret Chat must be blocked
+  const fwdBlockRes = await invokeRouter(handleRequest, `/api/chats/${secChatId}/forward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetChatIds: [dmId], messageIds: [secMsgId] })
+  });
+  assert.equal(fwdBlockRes.status, 403);
+
+  // Wait before Bob sees -> message does NOT expire yet
+  await new Promise((r) => setTimeout(r, 1100));
+  const secBeforeSeen = await invokeRouter(handleRequest, `/api/chats/${secChatId}/messages`, { headers: { Cookie: bob.cookie } });
+  assert.equal(secBeforeSeen.body.messages.some((m) => m.id === secMsgId), true);
+
+  // Bob marks read -> countdown starts now
+  const secReadRes = await invokeRouter(handleRequest, `/api/chats/${secChatId}/read`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(secReadRes.status, 200);
+  const secAfterSeenImmediate = await invokeRouter(handleRequest, `/api/chats/${secChatId}/messages`, { headers: { Cookie: bob.cookie } });
+  const secMsgSeenObj = secAfterSeenImmediate.body.messages.find((m) => m.id === secMsgId);
+  assert.ok(secMsgSeenObj && secMsgSeenObj.expiresAt);
+
+  // Wait > 1.05s after seen -> message self-destructs
+  await new Promise((r) => setTimeout(r, 1100));
+  const secExpiredRes = await invokeRouter(handleRequest, `/api/chats/${secChatId}/messages`, { headers: { Cookie: alice.cookie } });
+  assert.equal(secExpiredRes.body.messages.some((m) => m.id === secMsgId), false);
 });
 
 

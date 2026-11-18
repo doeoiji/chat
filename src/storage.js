@@ -6,7 +6,7 @@ const { validateEmail } = require('./emailValidator');
 const { hashPassword, verifyPassword } = require('./auth');
 
 const USERNAME_REGEX = /^[a-z0-9_]{3,24}$/;
-const CHAT_ID_REGEX = /^(?:dm_[a-z0-9_]{3,24}__[a-z0-9_]{3,24}|saved_[a-z0-9_]{3,24}|(?:grp|chn)_[a-z0-9]{10,24})$/;
+const CHAT_ID_REGEX = /^(?:(?:dm|sec)_[a-z0-9_]{3,24}__[a-z0-9_]{3,24}|saved_[a-z0-9_]{3,24}|(?:grp|chn)_[a-z0-9]{10,24})$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRIVACY_LEVELS = new Set(['everyone', 'contacts', 'nobody']);
 const DEFAULT_PRIVACY = {
@@ -1231,9 +1231,12 @@ function createStorage(config) {
             if (!meta || !Array.isArray(meta.participants) || !meta.participants.includes(oldClean)) return;
 
             const isDm = !meta.type || meta.type === 'dm';
+            const isSecret = meta.type === 'secret' || oldChatId.startsWith('sec_');
             const isSaved = meta.type === 'saved';
             const peer = meta.participants.find((p) => p !== oldClean) || newClean;
-            const newChatId = isSaved ? getSavedChatId(newClean) : (isDm ? getDmChatId(newClean, peer) : oldChatId);
+            const newChatId = isSaved
+              ? getSavedChatId(newClean)
+              : (isSecret ? getSecretChatId(newClean, peer) : (isDm ? getDmChatId(newClean, peer) : oldChatId));
             const messages = (await readJson(messagesPath, [])) || [];
 
             replaceUsernameInChatData(meta, messages, oldClean, newClean, oldChatId, newChatId);
@@ -1381,6 +1384,67 @@ function createStorage(config) {
 
   function getSavedChatId(username) {
     return `saved_${String(username || '').trim().toLowerCase()}`;
+  }
+
+  function getSecretChatId(userA, userB) {
+    const a = String(userA || '').trim().toLowerCase();
+    const b = String(userB || '').trim().toLowerCase();
+    return `sec_${[a, b].sort().join('__')}`;
+  }
+
+  async function ensureSecretChatFolder(userA, userB, creatorUsername = null) {
+    const a = String(userA || '').trim().toLowerCase();
+    const b = String(userB || '').trim().toLowerCase();
+    const chatId = getSecretChatId(a, b);
+    const folder = chatFolder(chatId);
+    return withLock(`chat:${chatId}`, async () => {
+      await fsp.mkdir(path.join(folder, 'files'), { recursive: true });
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const logPath = path.join(folder, 'chat.log');
+
+      let meta = await readJson(metaPath);
+      if (!meta) {
+        const now = new Date().toISOString();
+        const participants = [a, b].sort();
+        meta = {
+          id: chatId,
+          type: 'secret',
+          isSecret: true,
+          secretTimerSec: 10,
+          createdBy: creatorUsername || a,
+          participants,
+          createdAt: now,
+          updatedAt: now,
+          lastMessage: null,
+          unreadCounts: {
+            [participants[0]]: 0,
+            [participants[1]]: 0
+          }
+        };
+        await writeJsonAtomic(metaPath, meta);
+        await writeJsonAtomic(messagesPath, []);
+        await fsp.writeFile(logPath, `# VibeRoom Secret Chat: ${participants[0]} <-> ${participants[1]}\n# Created: ${now}\n`, 'utf8');
+      }
+      return meta;
+    });
+  }
+
+  async function setSecretChatTimer(chatId, username, timerSec) {
+    const folder = chatFolder(chatId);
+    if (!folder || !String(chatId).startsWith('sec_')) return null;
+    const cleanSec = Math.max(0, Math.min(7 * 24 * 3600, Math.round(Number(timerSec) || 0)));
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const meta = await readJson(metaPath);
+      if (!meta || meta.type !== 'secret' || !Array.isArray(meta.participants) || !meta.participants.includes(username)) {
+        return null;
+      }
+      meta.secretTimerSec = cleanSec;
+      meta.updatedAt = new Date().toISOString();
+      await writeJsonAtomic(metaPath, meta);
+      return meta;
+    });
   }
 
   async function ensureSavedChatFolder(username) {
@@ -1609,6 +1673,8 @@ function createStorage(config) {
       chats.push({
         id: meta.id,
         type: meta.type || 'dm',
+        isSecret: meta.type === 'secret' || String(meta.id).startsWith('sec_'),
+        secretTimerSec: meta.type === 'secret' ? (Number(meta.secretTimerSec) || 0) : 0,
         participants: meta.participants,
         peer,
         isPinned,
@@ -1646,12 +1712,44 @@ function createStorage(config) {
     return { meta: getVisibleChatMeta(updatedMeta, username), messages };
   }
 
-  function buildLastMessageSummary(msg) {
+  function buildLastMessageSummary(msg, meta = null) {
     if (!msg) return null;
     const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+    const isSecret = Boolean((meta && meta.type === 'secret') || (msg.chatId && String(msg.chatId).startsWith('sec_')));
     let preview = '';
+    if (isSecret) {
+      if (msg.kind === 'system' || msg.sender === 'system') preview = 'Secret chat timer updated';
+      else if (msg.viewOnce) preview = msg.consumed ? 'Self-destructed' : 'Sent a View-Once message';
+      else if (msg.poll) preview = 'Sent a poll';
+      else if (msg.game) preview = 'Sent a game';
+      else if (msg.call) preview = 'Call';
+      else if (msg.sticker) preview = msg.sticker.type === 'gif' ? 'Sent a GIF' : 'Sent a sticker';
+      else if (atts[0]) {
+        if (msg.kind === 'gif' || atts[0].mimeType === 'image/gif' || /\.gif$/i.test(atts[0].originalName || '')) preview = 'Sent a GIF';
+        else if (msg.kind === 'sticker') preview = 'Sent a sticker';
+        else if (atts[0].isImage) preview = 'Sent a photo';
+        else if (atts[0].mimeType && atts[0].mimeType.startsWith('audio/')) preview = 'Sent a voice message';
+        else if (atts[0].mimeType && atts[0].mimeType.startsWith('video/')) preview = 'Sent a video';
+        else preview = 'Sent a file';
+      } else {
+        preview = 'Sent a message';
+      }
+      return {
+        id: msg.id,
+        sender: msg.sender,
+        preview,
+        readBy: Array.isArray(msg.readBy) ? msg.readBy.slice() : (msg.sender ? [msg.sender] : []),
+        hasImage: false,
+        hasFile: false,
+        isSecret: true,
+        createdAt: msg.createdAt
+      };
+    }
+
     if (msg.viewOnce) {
       preview = msg.consumed ? '🔥 View-Once opened' : '🔒 View-Once message';
+    } else if (msg.timed && !msg.openedAt) {
+      preview = `⏱ Timed message (${msg.ttlSeconds || 10}s)`;
     } else if (msg.poll) {
       const icon = msg.poll.mode === 'quiz' ? '🧠 Quiz' : '📊 Poll';
       preview = `${icon}: ${msg.poll.question || ''}`.slice(0, 80);
@@ -1764,6 +1862,41 @@ function createStorage(config) {
         viewOnceState: 'sent'
       };
     }
+    if (msg.timed && !msg.viewOnce && !msg.secretMsg) {
+      const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+      const firstAtt = atts[0] || null;
+      const hint = {
+        hasText: Boolean(msg.text),
+        hasImage: atts.some((a) => a.isImage),
+        isVoice: Boolean(firstAtt && firstAtt.mimeType && firstAtt.mimeType.startsWith('audio/')),
+        isVideo: Boolean(firstAtt && firstAtt.mimeType && firstAtt.mimeType.startsWith('video/')),
+        hasFile: atts.length > 0,
+        fileName: firstAtt ? firstAtt.originalName : ''
+      };
+      if (!msg.openedAt) {
+        if (msg.sender !== viewerUsername) {
+          return {
+            ...out,
+            text: '',
+            attachments: [],
+            sticker: undefined,
+            linkPreview: undefined,
+            timedHint: hint,
+            timedState: 'sealed'
+          };
+        }
+        return {
+          ...out,
+          timedHint: hint,
+          timedState: 'waiting'
+        };
+      }
+      return {
+        ...out,
+        timedHint: hint,
+        timedState: 'counting'
+      };
+    }
     return out;
   }
 
@@ -1824,7 +1957,7 @@ function createStorage(config) {
       const filesDir = path.join(folder, 'files');
 
       const meta = await readJson(metaPath);
-      if (!meta || !meta.participants.includes(senderUsername)) {
+      if (!meta || (!(senderUsername === 'system' && kind === 'system') && !meta.participants.includes(senderUsername))) {
         const err = new Error('Chat not found.');
         err.statusCode = 404;
         throw err;
@@ -1881,21 +2014,29 @@ function createStorage(config) {
         : (game
           ? 'game'
           : (call ? 'call' : (cleanSticker ? cleanSticker.type : (allowedKind !== 'text' ? allowedKind : (inferredGif ? 'gif' : 'text')))));
+      const isSecretChat = meta.type === 'secret' || String(chatId).startsWith('sec_');
+      const isSystemMsg = kind === 'system' || senderUsername === 'system';
+      const secretTimer = isSecretChat ? (Number(meta.secretTimerSec) || 0) : 0;
+      const effectiveTtl = isSystemMsg
+        ? 0
+        : (isSecretChat ? (cleanTtl > 0 ? cleanTtl : secretTimer) : cleanTtl);
+      const isTimedBox = Boolean(!isSystemMsg && !isViewOnce && !isSecretChat && effectiveTtl > 0);
       const readBy = call && call.status !== 'missed' && Array.isArray(meta.participants)
         ? meta.participants.slice()
         : [senderUsername];
-      const expiresAt = cleanTtl > 0 ? new Date(Date.now() + cleanTtl * 1000).toISOString() : undefined;
       const message = {
         id: `msg_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
         chatId,
-        kind: msgKind,
+        kind: isSystemMsg ? 'system' : msgKind,
         sender: senderUsername,
         text: cleanText,
         mentions,
         attachments,
         voiceMeta: cleanVoiceMeta || undefined,
-        ttlSeconds: cleanTtl > 0 ? cleanTtl : undefined,
-        expiresAt,
+        ttlSeconds: effectiveTtl > 0 ? effectiveTtl : undefined,
+        timed: isTimedBox ? true : undefined,
+        secretMsg: isSecretChat && !isSystemMsg ? true : undefined,
+        expiresAt: undefined,
         viewOnce: isViewOnce ? true : undefined,
         viewedBy: isViewOnce ? [] : undefined,
         consumed: isViewOnce ? false : undefined,
@@ -1914,17 +2055,21 @@ function createStorage(config) {
       messages.push(message);
       await writeJsonAtomic(messagesPath, messages);
 
-      // Append human-readable line to chat.log
-      const stickerNote = cleanSticker ? ` [${cleanSticker.type}: ${cleanSticker.label || cleanSticker.id}]` : '';
-      const attachmentNote = attachments.length
-        ? ` ${attachments.map((a) => `[${a.isImage ? 'image' : 'file'}: ${a.originalName} (${a.size}B)]`).join(' ')}`
-        : '';
-      const logLine = `[${now}] ${senderUsername}: ${cleanText.replace(/\r?\n/g, ' ')}${stickerNote}${attachmentNote}\n`;
-      await fsp.appendFile(logPath, logLine, 'utf8');
+      // Append human-readable line to chat.log (never store plaintext content for Secret Chats)
+      if (isSecretChat) {
+        await fsp.appendFile(logPath, `[${now}] ${senderUsername}: [secret chat event]\n`, 'utf8');
+      } else {
+        const stickerNote = cleanSticker ? ` [${cleanSticker.type}: ${cleanSticker.label || cleanSticker.id}]` : '';
+        const attachmentNote = attachments.length
+          ? ` ${attachments.map((a) => `[${a.isImage ? 'image' : 'file'}: ${a.originalName} (${a.size}B)]`).join(' ')}`
+          : '';
+        const logLine = `[${now}] ${senderUsername}: ${cleanText.replace(/\r?\n/g, ' ')}${stickerNote}${attachmentNote}\n`;
+        await fsp.appendFile(logPath, logLine, 'utf8');
+      }
 
       // Update meta & revive chat visibility for participants on new activity
       meta.updatedAt = now;
-      meta.lastMessage = buildLastMessageSummary(message);
+      meta.lastMessage = buildLastMessageSummary(message, meta);
       if (Array.isArray(meta.hiddenFor) && meta.hiddenFor.length > 0) {
         meta.hiddenFor = [];
       }
@@ -1932,7 +2077,7 @@ function createStorage(config) {
         delete meta.lastMessageByUser;
       }
       meta.unreadCounts = meta.unreadCounts || {};
-      const markUnreadForPeer = !call || call.status === 'missed';
+      const markUnreadForPeer = !isSystemMsg && (!call || call.status === 'missed');
       if (markUnreadForPeer) {
         for (const participant of meta.participants) {
           if (participant !== senderUsername) {
@@ -1979,15 +2124,26 @@ function createStorage(config) {
 
       const messages = (await readJson(messagesPath, [])) || [];
       const newlyReadIds = [];
+      const updatedSecretMsgs = [];
+      const isSecretChat = meta.type === 'secret' || String(chatId).startsWith('sec_');
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
       for (const msg of messages) {
         if (!Array.isArray(msg.readBy)) msg.readBy = [msg.sender];
-        if (!msg.readBy.includes(username)) {
+        const wasUnreadByMe = !msg.readBy.includes(username);
+        if (wasUnreadByMe) {
           msg.readBy.push(username);
           newlyReadIds.push(msg.id);
         }
+        // In Secret Chats, start the countdown once the other user has SEEN the message
+        if (isSecretChat && msg.sender !== username && msg.sender !== 'system' && msg.ttlSeconds > 0 && !msg.expiresAt) {
+          msg.seenAt = nowIso;
+          msg.expiresAt = new Date(nowMs + msg.ttlSeconds * 1000).toISOString();
+          updatedSecretMsgs.push(msg);
+        }
       }
 
-      if (newlyReadIds.length > 0) {
+      if (newlyReadIds.length > 0 || updatedSecretMsgs.length > 0) {
         await writeJsonAtomic(messagesPath, messages);
       }
 
@@ -2028,7 +2184,7 @@ function createStorage(config) {
         await writeJsonAtomic(metaPath, meta);
       }
 
-      return { meta, newlyReadIds };
+      return { meta, newlyReadIds, updatedSecretMsgs };
     });
   }
 
@@ -2782,6 +2938,42 @@ function createStorage(config) {
     });
   }
 
+  async function openTimedMessage(chatId, messageId, viewerUsername) {
+    const folder = chatFolder(chatId);
+    if (!folder) return null;
+    return withLock(`chat:${chatId}`, async () => {
+      const metaPath = path.join(folder, 'meta.json');
+      const messagesPath = path.join(folder, 'messages.json');
+      const meta = await readJson(metaPath);
+      if (!meta || !meta.participants.includes(viewerUsername)) return null;
+
+      const messages = (await readJson(messagesPath, [])) || [];
+      const msg = messages.find((m) => m.id === messageId);
+      if (!msg || !msg.timed || !msg.ttlSeconds) return null;
+
+      if (msg.sender === viewerUsername) {
+        const err = new Error('Timed messages start counting down when the recipient opens them.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      if (!msg.openedAt) {
+        const nowMs = Date.now();
+        msg.openedAt = new Date(nowMs).toISOString();
+        msg.expiresAt = new Date(nowMs + msg.ttlSeconds * 1000).toISOString();
+        if (!Array.isArray(msg.readBy)) msg.readBy = [msg.sender];
+        if (!msg.readBy.includes(viewerUsername)) msg.readBy.push(viewerUsername);
+        await writeJsonAtomic(messagesPath, messages);
+      } else if (msg.expiresAt && new Date(msg.expiresAt).getTime() <= Date.now()) {
+        const err = new Error('This timed message has expired.');
+        err.statusCode = 410;
+        throw err;
+      }
+
+      return { message: msg, meta };
+    });
+  }
+
   // =========================================================================
   // Game Stats, Streaks & Friends Leaderboard
   // =========================================================================
@@ -2924,6 +3116,9 @@ function createStorage(config) {
       if (owningMsg.expiresAt && new Date(owningMsg.expiresAt).getTime() <= Date.now()) {
         return null;
       }
+      if (owningMsg.timed && !owningMsg.openedAt && owningMsg.sender !== username) {
+        return null;
+      }
       if (owningMsg.viewOnce) {
         if (owningMsg.consumed) return null;
         if (owningMsg.sender !== username) {
@@ -2946,6 +3141,11 @@ function createStorage(config) {
     AVATAR_GRADIENTS,
     getDmChatId,
     getSavedChatId,
+    getSecretChatId,
+    ensureChatFolder,
+    ensureSavedChatFolder,
+    ensureSecretChatFolder,
+    setSecretChatTimer,
     withLock,
     userFolder,
     chatFolder,
@@ -2980,8 +3180,6 @@ function createStorage(config) {
     removeUserAvatar,
     getUserAvatarPath,
     searchUsers,
-    ensureChatFolder,
-    ensureSavedChatFolder,
     getUserChatPrefs,
     setUserChatPref,
     setUserChatPrefsBulk,
@@ -3009,6 +3207,7 @@ function createStorage(config) {
     purgeAllExpiredMessages,
     openViewOnceMessage,
     burnViewOnceMessage,
+    openTimedMessage,
     sanitizeMessageForViewer,
     getUserGameStats,
     recordGameOutcome,

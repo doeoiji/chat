@@ -91,6 +91,13 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
     }
   }
 
+  function parsePairChatParts(chatId) {
+    const id = String(chatId || '');
+    if (id.startsWith('sec_')) return id.slice(4).split('__');
+    if (id.startsWith('dm_')) return id.slice(3).split('__');
+    return [];
+  }
+
   function dispatchChatPushNotifications(meta, senderUser, message) {
     if (!meta || !Array.isArray(meta.participants) || !message) return;
     const recipients = meta.participants.filter((u) => u && u !== senderUser.username);
@@ -218,7 +225,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
   }
 
   function scheduleLinkPreview(chatId, message) {
-    if (!message || !message.text || message.viewOnce || message.kind === 'poll') return;
+    if (!message || !message.text || message.viewOnce || message.timed || message.kind === 'poll' || String(chatId || '').startsWith('sec_')) return;
     const url = linkPreview.extractFirstUrl(message.text);
     if (!url) return;
     linkPreview.fetchPreview(url).then(async (preview) => {
@@ -937,7 +944,13 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           });
         }
 
-        const targetUsername = String(body.targetUsername || '').trim().toLowerCase();
+        const targetUsernameRaw = String(body.targetUsername || '').trim().toLowerCase();
+        const isSecretRequest = body.type === 'secret' || (body.chatId && String(body.chatId).startsWith('sec_'));
+        let targetUsername = targetUsernameRaw;
+        if (!targetUsername && isSecretRequest && body.chatId) {
+          const secParts = parsePairChatParts(body.chatId);
+          targetUsername = secParts.find((p) => p !== me.username) || '';
+        }
         if (!targetUsername || targetUsername === me.username) {
           return sendJson(res, 400, { error: 'Invalid target user.' });
         }
@@ -950,6 +963,37 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           ...enrichedPeer,
           relationship: await friends.getRelationship(me.username, targetUsername)
         };
+
+        if (isSecretRequest) {
+          const blk = await storage.getBlockStatus(me.username, targetUsername);
+          if (blk.anyBlocked) {
+            return sendJson(res, 403, { error: 'Cannot open Secret Chat while blocked.' });
+          }
+          const secretId = storage.getSecretChatId(me.username, targetUsername);
+          await storage.ensureSecretChatFolder(me.username, targetUsername, me.username);
+          const { meta, messages } = await storage.getMessages(secretId, me.username);
+          return sendJson(res, 200, {
+            chat: {
+              id: meta.id,
+              type: 'secret',
+              isSecret: true,
+              secretTimerSec: Number(meta.secretTimerSec) || 0,
+              participants: meta.participants,
+              peer,
+              isPinned: pinnedSet.has(meta.id),
+              isMuted: mutedSet.has(meta.id),
+              isArchived: archivedSet.has(meta.id),
+              pinnedMessage: meta.pinnedMessage || null,
+              createdAt: meta.createdAt,
+              updatedAt: meta.updatedAt,
+              lastMessage: meta.lastMessage,
+              unreadCount: (meta.unreadCounts && meta.unreadCounts[me.username]) || 0,
+              exists: true
+            },
+            messages
+          });
+        }
+
         const chatId = storage.getDmChatId(me.username, targetUsername);
         const existingMeta = await storage.getChatMeta(chatId);
 
@@ -979,6 +1023,8 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           chat: {
             id: meta.id,
             type: meta.type,
+            isSecret: meta.type === 'secret',
+            secretTimerSec: meta.type === 'secret' ? (Number(meta.secretTimerSec) || 0) : 0,
             participants: meta.participants,
             peer,
             isPinned: pinnedSet.has(meta.id),
@@ -1078,7 +1124,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           }
           await storage.ensureSavedChatFolder(me.username);
         } else {
-          const parts = chatId.slice(3).split('__');
+          const parts = parsePairChatParts(chatId);
           if (!parts.includes(me.username)) {
             return sendJson(res, 403, { error: 'Forbidden.' });
           }
@@ -1094,7 +1140,11 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           if (blk.blockedByB) {
             return sendJson(res, 403, { error: 'You cannot send messages to this user.' });
           }
-          await storage.ensureChatFolder(me.username, peerUsername);
+          if (chatId.startsWith('sec_')) {
+            await storage.ensureSecretChatFolder(me.username, peerUsername, me.username);
+          } else {
+            await storage.ensureChatFolder(me.username, peerUsername);
+          }
         }
 
         const { message, meta } = await storage.appendChatMessage(chatId, me.username, {
@@ -1153,6 +1203,11 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
             messageIds: result.newlyReadIds
           });
         }
+        if (Array.isArray(result.updatedSecretMsgs) && result.updatedSecretMsgs.length > 0) {
+          for (const sm of result.updatedSecretMsgs) {
+            emitSanitizedMessageEvent(result.meta.participants, 'message_updated', chatId, sm);
+          }
+        }
         return sendJson(res, 200, { ok: true, newlyReadIds: result.newlyReadIds });
       }
 
@@ -1177,7 +1232,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           if (chatId !== storage.getSavedChatId(me.username)) return sendJson(res, 403, { error: 'Forbidden.' });
           recipients = [];
         } else {
-          const parts = chatId.slice(3).split('__');
+          const parts = parsePairChatParts(chatId);
           if (!parts.includes(me.username)) return sendJson(res, 403, { error: 'Forbidden.' });
           recipients = parts.filter((p) => p !== me.username);
         }
@@ -1311,6 +1366,9 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
         const me = await requireAuth(req, res);
         if (!me) return;
         const fromChatId = forwardMatch[1];
+        if (String(fromChatId).startsWith('sec_')) {
+          return sendJson(res, 403, { error: 'Messages in Secret Chats cannot be forwarded.' });
+        }
         const body = await readJsonBody(req);
         const targets = Array.isArray(body.targetChatIds) ? body.targetChatIds.slice(0, 10) : [];
         const messageIds = Array.isArray(body.messageIds) ? body.messageIds : [];
@@ -1321,7 +1379,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
         const forwardedCount = [];
         for (const rawTarget of targets) {
           const targetChatId = rawTarget === 'saved' ? storage.getSavedChatId(me.username) : String(rawTarget || '');
-          if (!storage.CHAT_ID_REGEX.test(targetChatId)) continue;
+          if (!storage.CHAT_ID_REGEX.test(targetChatId) || targetChatId.startsWith('sec_')) continue;
           if (targetChatId.startsWith('saved_')) {
             if (targetChatId !== storage.getSavedChatId(me.username)) continue;
             await storage.ensureSavedChatFolder(me.username);
@@ -1329,7 +1387,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
             const tm = await storage.getChatMeta(targetChatId);
             if (!tm || !tm.participants.includes(me.username)) continue;
           } else {
-            const parts = targetChatId.slice(3).split('__');
+            const parts = parsePairChatParts(targetChatId);
             if (!parts.includes(me.username)) continue;
             const peer = parts.find((p) => p !== me.username) || parts[0];
             await storage.ensureChatFolder(me.username, peer);
@@ -1557,6 +1615,63 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
         });
       }
 
+      // Open timed self-destructing message (starts countdown only once recipient opens it)
+      const timedOpenMatch = /^\/api\/chats\/([^/]+)\/messages\/([^/]+)\/open-timed$/.exec(pathname);
+      if (method === 'POST' && timedOpenMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const [, chatId, msgId] = timedOpenMatch;
+        const out = await storage.openTimedMessage(chatId, msgId, me.username);
+        if (!out) return sendJson(res, 404, { error: 'Timed message not found.' });
+        auditLogger.log({
+          action: 'MESSAGE_TIMED_OPENED',
+          username: me.username,
+          req,
+          details: { chatId, messageId: msgId, ttlSeconds: out.message.ttlSeconds }
+        });
+        emitSanitizedMessageEvent(out.meta.participants, 'message_updated', chatId, out.message);
+        return sendJson(res, 200, {
+          message: storage.sanitizeMessageForViewer(out.message, me.username)
+        });
+      }
+
+      // Update Secret Chat self-destruct timer
+      const secretTimerMatch = /^\/api\/chats\/([^/]+)\/secret-timer$/.exec(pathname);
+      if (method === 'POST' && secretTimerMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const chatId = secretTimerMatch[1];
+        const body = await readJsonBody(req);
+        const timerSec = Math.max(0, Math.min(7 * 24 * 3600, Math.round(Number(body.timerSec) || 0)));
+        const meta = await storage.setSecretChatTimer(chatId, me.username, timerSec);
+        if (!meta) return sendJson(res, 404, { error: 'Secret chat not found.' });
+        const label = timerSec === 0
+          ? 'Off'
+          : (timerSec < 60 ? `${timerSec}s` : (timerSec < 3600 ? `${Math.round(timerSec / 60)}m` : `${Math.round(timerSec / 3600)}h`));
+        const noticeText = timerSec === 0
+          ? `🔒 @${me.username} turned off the self-destruct timer`
+          : `🔒 @${me.username} set the self-destruct timer to ${label}`;
+        const sysOut = await storage.appendChatMessage(chatId, 'system', {
+          text: noticeText,
+          kind: 'system',
+          allowChannelSystem: true
+        });
+        auditLogger.log({
+          action: 'SECRET_CHAT_TIMER_UPDATED',
+          username: me.username,
+          req,
+          details: { chatId, timerSec }
+        });
+        hub.emitToUsers(meta.participants, 'chat_updated', {
+          chatId,
+          chat: { ...meta, isSecret: true, secretTimerSec: timerSec }
+        });
+        if (sysOut && sysOut.message) {
+          emitSanitizedMessageEvent(meta.participants, 'new_message', chatId, sysOut.message, { meta: sysOut.meta });
+        }
+        return sendJson(res, 200, { secretTimerSec: timerSec, chat: meta });
+      }
+
       // In-Chat Polls & Quizzes
       const chatPollsMatch = /^\/api\/chats\/([^/]+)\/polls$/.exec(pathname);
       if (method === 'POST' && chatPollsMatch) {
@@ -1565,10 +1680,11 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
         const chatId = chatPollsMatch[1];
         const body = await readJsonBody(req);
         if (!groups.isGroupOrChannelId(chatId)) {
-          const parts = chatId.startsWith('dm_') ? chatId.slice(3).split('__') : [];
+          const parts = parsePairChatParts(chatId);
           if (parts.length === 2 && parts.includes(me.username)) {
             const peer = parts.find((p) => p !== me.username) || parts[0];
-            await storage.ensureChatFolder(me.username, peer);
+            if (chatId.startsWith('sec_')) await storage.ensureSecretChatFolder(me.username, peer, me.username);
+            else await storage.ensureChatFolder(me.username, peer);
           }
         }
         const { message, meta } = await polls.createPoll({
@@ -1848,10 +1964,11 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
         const chatId = gameCreateMatch[1];
         const body = await readJsonBody(req);
         if (!groups.isGroupOrChannelId(chatId)) {
-          const parts = chatId.startsWith('dm_') ? chatId.slice(3).split('__') : [];
+          const parts = parsePairChatParts(chatId);
           if (parts.length === 2 && parts.includes(me.username)) {
             const peer = parts.find((p) => p !== me.username) || parts[0];
-            await storage.ensureChatFolder(me.username, peer);
+            if (chatId.startsWith('sec_')) await storage.ensureSecretChatFolder(me.username, peer, me.username);
+            else await storage.ensureChatFolder(me.username, peer);
           }
         }
         const { message, meta } = await games.createGame({

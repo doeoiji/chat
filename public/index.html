@@ -472,32 +472,34 @@
                 <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
               </svg>
             </button>
-            <button id="open-games-btn" class="icon-btn" type="button" title="Play Mini-Game" aria-label="Play Mini-Game">
-              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="6" width="20" height="12" rx="4" />
-                <line x1="6" y1="12" x2="10" y2="12" />
-                <line x1="8" y1="10" x2="8" y2="14" />
-                <circle cx="15.5" cy="10.5" r="0.8" fill="currentColor" />
-                <circle cx="17.5" cy="13.5" r="0.8" fill="currentColor" />
-              </svg>
-            </button>
-            <button id="open-poll-btn" class="icon-btn" type="button" title="Create Poll or Quiz" aria-label="Create Poll or Quiz">
-              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="20" x2="18" y2="10" />
-                <line x1="12" y1="20" x2="12" y2="4" />
-                <line x1="6" y1="20" x2="6" y2="14" />
-              </svg>
-            </button>
-            <button id="toggle-chat-search-btn" class="icon-btn" type="button" title="Search in chat"
-              aria-label="Search in chat">
-              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="11" cy="11" r="7" />
-                <line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-            </button>
+            <div class="chat-more-anchor">
+              <button id="chat-more-btn" class="icon-btn" type="button" title="More options" aria-label="More chat options" aria-haspopup="true" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2"
+                  stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="5" r="1" fill="currentColor" />
+                  <circle cx="12" cy="12" r="1" fill="currentColor" />
+                  <circle cx="12" cy="19" r="1" fill="currentColor" />
+                </svg>
+              </button>
+              <div id="chat-more-menu" class="chat-more-menu hidden" role="menu">
+                <button id="toggle-chat-search-btn" class="chat-more-item" type="button" role="menuitem">
+                  <span>🔍</span>
+                  <span>Search in Chat</span>
+                </button>
+                <button id="open-games-btn" class="chat-more-item" type="button" role="menuitem">
+                  <span>🎮</span>
+                  <span>Mini-Games &amp; Streaks</span>
+                </button>
+                <button id="open-poll-btn" class="chat-more-item" type="button" role="menuitem">
+                  <span>📊</span>
+                  <span>Create Poll / Quiz</span>
+                </button>
+                <button id="chat-more-secret-btn" class="chat-more-item hidden" type="button" role="menuitem">
+                  <span>🔒</span>
+                  <span id="chat-more-secret-label">Start Secret Chat</span>
+                </button>
+              </div>
+            </div>
             <button id="toggle-info-btn" class="icon-btn" type="button" title="Chat Info &amp; Shared Media"
               aria-label="Chat info">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
@@ -508,6 +510,23 @@
             </button>
           </div>
         </header>
+
+        <!-- Secret Chat Self-Destruct Timer Bar -->
+        <div id="secret-chat-bar" class="secret-chat-bar hidden">
+          <div class="secret-chat-bar-left">
+            <span class="secret-lock-ico">🔒</span>
+            <span>Secret Chat • Auto-delete after seen</span>
+          </div>
+          <select id="secret-timer-select" class="secret-timer-select" aria-label="Secret chat self-destruct timer">
+            <option value="0">Timer: Off</option>
+            <option value="5">⏱ 5s</option>
+            <option value="10">⏱ 10s</option>
+            <option value="30">⏱ 30s</option>
+            <option value="60">⏱ 1m</option>
+            <option value="300">⏱ 5m</option>
+            <option value="3600">⏱ 1h</option>
+          </select>
+        </div>
 
         <!-- In-Chat Message Search Bar -->
         <div id="chat-search-bar" class="chat-search-bar hidden">
@@ -723,6 +742,7 @@
         <button id="info-pin-chat-btn" class="secondary-btn sm" type="button">📌 Pin Chat</button>
         <button id="info-mute-chat-btn" class="secondary-btn sm" type="button">🔇 Mute</button>
         <button id="info-archive-chat-btn" class="secondary-btn sm" type="button">📦 Archive</button>
+        <button id="info-secret-chat-btn" class="secondary-btn sm hidden" type="button">🔒 Secret Chat</button>
       </div>
       <div id="info-friend-controls" class="info-friend-controls hidden"></div>
       <div id="info-safety-controls" class="info-safety-controls hidden">
@@ -1444,8 +1464,8 @@
     </div>
   </div>
 
-  <!-- View-Once Reveal Modal -->
-  <div id="view-once-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="view-once-title">
+  <!-- View-Once / Timed Self-Destruct Reveal Modal -->
+  <div id="view-once-modal" class="modal hidden privacy-protected-modal" role="dialog" aria-modal="true" aria-labelledby="view-once-title">
     <div class="modal-backdrop" id="view-once-backdrop"></div>
     <div class="modal-card modal-card-sm">
       <div class="modal-header">
@@ -1454,11 +1474,20 @@
       </div>
       <div class="modal-body">
         <div id="view-once-body" class="view-once-body"></div>
-        <p class="vr-hint centered">This content will permanently self-destruct as soon as you close it.</p>
+        <p id="view-once-desc" class="vr-hint centered">This content will permanently self-destruct as soon as you close it.</p>
         <div class="modal-actions">
           <button id="view-once-done-btn" class="primary-btn full-width" type="button">Done &amp; Burn</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Privacy Curtain (Shown when protected Secret Chat loses focus / PrintScreen detected) -->
+  <div id="privacy-curtain" class="privacy-curtain hidden" aria-hidden="true">
+    <div class="privacy-curtain-card">
+      <div class="privacy-curtain-icon">🔒</div>
+      <strong>Protected Secret Content Hidden</strong>
+      <span>Screenshots and screen capture are disabled for self-destructing &amp; secret chats.</span>
     </div>
   </div>
 

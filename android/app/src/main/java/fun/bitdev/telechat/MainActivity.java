@@ -15,6 +15,7 @@ import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowManager;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
@@ -697,6 +698,19 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String getFcmToken() {
             return ViberoomFcmService.getCachedToken(MainActivity.this);
+        }
+
+        @JavascriptInterface
+        public void setScreenCaptureBlocked(boolean blocked) {
+            runOnUiThread(() -> {
+                Window w = getWindow();
+                if (w == null) return;
+                if (blocked) {
+                    w.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                } else {
+                    w.clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                }
+            });
         }
 
         @JavascriptInterface
