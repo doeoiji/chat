@@ -111,7 +111,9 @@ public class MainActivity extends Activity {
             }
         });
 
-        webView = new WebView(this);
+        RichMediaWebView richView = new RichMediaWebView(this);
+        richView.setRichContentListener(this::handleKeyboardRichContent);
+        webView = richView;
         webView.setBackgroundColor(Color.parseColor("#0E1621"));
         rootContainer.addView(webView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
@@ -417,9 +419,62 @@ public class MainActivity extends Activity {
         }, "VibeRoom-ShareTarget").start();
     }
 
+    private void handleKeyboardRichContent(Uri contentUri, String hintMime, Runnable releasePermission) {
+        if (contentUri == null) {
+            if (releasePermission != null) releasePermission.run();
+            return;
+        }
+        new Thread(() -> {
+            try {
+                File shareDir = new File(getCacheDir(), "shared");
+                if (!shareDir.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    shareDir.mkdirs();
+                }
+                SharedCachedFile cached = copySharedUriToCache(shareDir, contentUri, hintMime);
+                if (cached == null) return;
+                String token = UUID.randomUUID().toString();
+                sharedFilesMap.put(token, cached);
+
+                JSONObject payload = new JSONObject();
+                payload.put("token", token);
+                payload.put("url", baseUrl + "/__android_share__/" + token);
+                payload.put("name", cached.displayName);
+                payload.put("mime", cached.mimeType);
+                payload.put("size", cached.sizeBytes);
+                String lowerMime = cached.mimeType != null ? cached.mimeType.toLowerCase() : "";
+                String lowerName = cached.displayName != null ? cached.displayName.toLowerCase() : "";
+                payload.put("kind", (lowerMime.contains("gif") || lowerName.endsWith(".gif")) ? "gif" : "sticker");
+                String payloadStr = payload.toString();
+
+                runOnUiThread(() -> {
+                    if (webView != null && pageLoaded) {
+                        webView.evaluateJavascript(
+                            "if (window.__telechatReceiveKeyboardMedia) { window.__telechatReceiveKeyboardMedia(" + payloadStr + "); }",
+                            null
+                        );
+                    }
+                });
+            } catch (Exception ignored) {
+            } finally {
+                if (releasePermission != null) {
+                    releasePermission.run();
+                }
+            }
+        }, "VibeRoom-KeyboardMedia").start();
+    }
+
     private SharedCachedFile copySharedUriToCache(File shareDir, Uri uri) {
+        return copySharedUriToCache(shareDir, uri, null);
+    }
+
+    private SharedCachedFile copySharedUriToCache(File shareDir, Uri uri, String hintMime) {
         try {
             String mime = getContentResolver().getType(uri);
+            if ((mime == null || mime.trim().isEmpty() || "application/octet-stream".equalsIgnoreCase(mime))
+                && hintMime != null && !hintMime.trim().isEmpty()) {
+                mime = hintMime.trim();
+            }
             String name = queryDisplayName(uri);
             if (mime == null || mime.trim().isEmpty()) {
                 String ext = name != null && name.contains(".") ? name.substring(name.lastIndexOf('.') + 1).toLowerCase() : "";
@@ -634,6 +689,16 @@ public class MainActivity extends Activity {
                 }
             }
             sharedFilesMap.clear();
+        }
+
+        @JavascriptInterface
+        public void clearSharedFile(String token) {
+            if (token == null || token.isEmpty()) return;
+            SharedCachedFile item = sharedFilesMap.remove(token);
+            if (item != null && item.file != null) {
+                //noinspection ResultOfMethodCallIgnored
+                item.file.delete();
+            }
         }
 
         @JavascriptInterface

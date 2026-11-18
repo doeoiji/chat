@@ -22,6 +22,7 @@ const MIME_TYPES = {
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+  '.apng': 'image/apng',
   '.avif': 'image/avif',
   '.bmp': 'image/bmp',
   '.ico': 'image/x-icon',
@@ -38,7 +39,7 @@ const MIME_TYPES = {
 };
 
 const INLINE_SAFE_MIMES = new Set([
-  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/apng', 'image/avif', 'image/bmp',
   'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/mp4', 'audio/webm',
   'video/mp4', 'video/webm', 'application/pdf'
 ]);
@@ -992,6 +993,8 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
 
         let text = '';
         let replyToId = null;
+        let kind = 'text';
+        let sticker = null;
         let files = [];
 
         const contentType = req.headers['content-type'] || '';
@@ -1000,11 +1003,23 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
           const parsed = parseMultipart(buf, contentType);
           text = parsed.fields.text || '';
           replyToId = parsed.fields.replyToId || null;
+          if (parsed.fields.kind === 'sticker' || parsed.fields.kind === 'gif') {
+            kind = parsed.fields.kind;
+          }
+          if (parsed.fields.sticker) {
+            try { sticker = JSON.parse(parsed.fields.sticker); } catch { }
+          }
           files = parsed.files;
         } else {
           const body = await readJsonBody(req);
           text = body.text || '';
           replyToId = body.replyToId || null;
+          if (body.kind === 'sticker' || body.kind === 'gif') {
+            kind = body.kind;
+          }
+          if (body.sticker && typeof body.sticker === 'object') {
+            sticker = body.sticker;
+          }
         }
 
         if (groups.isGroupOrChannelId(chatId)) {
@@ -1040,7 +1055,9 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         const { message, meta } = await storage.appendChatMessage(chatId, me.username, {
           text,
           files,
-          replyToId
+          replyToId,
+          kind,
+          sticker
         });
 
         await storage.updateLastSeen(me.username);

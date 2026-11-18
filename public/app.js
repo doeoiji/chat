@@ -243,6 +243,10 @@
     messageInput: $('message-input'),
     emojiBtn: $('emoji-btn'),
     emojiPopover: $('emoji-popover'),
+    pickerTabs: $('picker-tabs'),
+    pickerSearchWrap: $('picker-search-wrap'),
+    pickerSearchInput: $('picker-search-input'),
+    pickerBody: $('picker-body'),
     mentionPopover: $('mention-popover'),
     channelReadonlyBar: $('channel-readonly-bar'),
     dmBlockedBar: $('dm-blocked-bar'),
@@ -2317,7 +2321,17 @@
 
   function renderAttachmentsHtml(msg) {
     if (!Array.isArray(msg.attachments) || msg.attachments.length === 0) return '';
+    const isRichStickerOrGif = !msg.text && msg.attachments.length === 1 && msg.attachments[0].isImage && (msg.kind === 'sticker' || msg.kind === 'gif' || msg.attachments[0].mimeType === 'image/gif');
     const items = msg.attachments.map((att) => {
+      if (isRichStickerOrGif) {
+        const isGif = msg.kind === 'gif' || att.mimeType === 'image/gif' || /\.gif$/i.test(att.originalName || '');
+        return `
+          <div class="msg-rich-media-wrap ${isGif ? 'is-gif' : 'is-sticker'}" data-lightbox-url="${escapeHtml(att.url)}" data-lightbox-name="${escapeHtml(att.originalName)}" data-lightbox-sender="${escapeHtml(msg.sender)}" data-lightbox-caption="">
+            ${isGif ? '<span class="vr-gif-badge">GIF</span>' : ''}
+            <img src="${escapeHtml(att.url)}" alt="${escapeHtml(att.originalName)}" loading="lazy" />
+          </div>
+        `;
+      }
       if (att.isImage) {
         return `
           <div class="msg-image-wrap" data-lightbox-url="${escapeHtml(att.url)}" data-lightbox-name="${escapeHtml(att.originalName)}" data-lightbox-sender="${escapeHtml(msg.sender)}" data-lightbox-caption="${escapeHtml(msg.text || '')}">
@@ -2495,11 +2509,26 @@
         ? `<span class="msg-select-check">${isSelected ? '✓' : ''}</span>`
         : '';
 
+      let stickerCardHtml = '';
+      if (msg.sticker) {
+        if (window.VibeRoomStickers && typeof window.VibeRoomStickers.renderBubbleHtml === 'function') {
+          stickerCardHtml = window.VibeRoomStickers.renderBubbleHtml(msg.sticker);
+        } else {
+          stickerCardHtml = `<div class="vr-sticker-fallback">${escapeHtml(msg.sticker.emoji || '🎭')}</div>`;
+        }
+      }
+
+      const isMediaStickerBubble = Boolean(
+        !msg.text &&
+        (stickerCardHtml || (msg.attachments && msg.attachments.length === 1 && msg.attachments[0].isImage && (msg.kind === 'sticker' || msg.kind === 'gif' || msg.attachments[0].mimeType === 'image/gif')))
+      );
+
       const bubbleHtml = `
-        <div class="msg-bubble">
+        <div class="msg-bubble${isMediaStickerBubble ? ' sticker-bubble' : ''}">
           ${fwdHeaderHtml}
           ${senderHeaderHtml}
           ${replyHtml}
+          ${stickerCardHtml}
           ${renderAttachmentsHtml(msg)}
           ${gameCardHtml}
           ${callCardHtml}
@@ -3848,10 +3877,136 @@
   // =========================================================================
   // Boot & Event Listeners
   // =========================================================================
+  let activePickerTab = 'emoji';
+  function renderPickerBody() {
+    const bodyEl = els.pickerBody || els.emojiPopover;
+    if (!bodyEl) return;
+    if (els.pickerSearchWrap) {
+      els.pickerSearchWrap.classList.toggle('hidden', activePickerTab === 'emoji');
+    }
+    if (els.pickerTabs) {
+      els.pickerTabs.querySelectorAll('[data-picker-tab]').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.pickerTab === activePickerTab);
+      });
+    }
+    if (activePickerTab === 'emoji') {
+      bodyEl.innerHTML = `<div class="emoji-grid">${EMOJI_LIST.map(
+        (em) => `<button type="button" class="emoji-item" data-insert-emoji="${em}">${em}</button>`
+      ).join('')}</div>`;
+      return;
+    }
+    const query = els.pickerSearchInput ? els.pickerSearchInput.value : '';
+    const items = window.VibeRoomStickers && typeof window.VibeRoomStickers.searchItems === 'function'
+      ? window.VibeRoomStickers.searchItems(activePickerTab, query)
+      : [];
+    if (items.length === 0) {
+      bodyEl.innerHTML = `<div class="picker-empty">No ${activePickerTab === 'gif' ? 'GIFs' : 'stickers'} matched your search.</div>`;
+      return;
+    }
+    const gridCls = activePickerTab === 'gif' ? 'gif-grid' : 'sticker-grid';
+    bodyEl.innerHTML = `<div class="${gridCls}">${items.map((item) => `
+      <button type="button" class="picker-media-item" data-send-sticker="${escapeHtml(item.id)}" title="${escapeHtml(item.label || '')}">
+        ${window.VibeRoomStickers.renderBubbleHtml(item)}
+      </button>
+    `).join('')}</div>`;
+  }
+
   function initEmojiPopover() {
-    els.emojiPopover.innerHTML = EMOJI_LIST.map(
-      (em) => `<button type="button" class="emoji-item" data-insert-emoji="${em}">${em}</button>`
-    ).join('');
+    renderPickerBody();
+  }
+
+  async function sendBuiltInStickerOrGif(stickerId) {
+    if (!state.activeChatId || state.sending) return;
+    const item = window.VibeRoomStickers && window.VibeRoomStickers.getById ? window.VibeRoomStickers.getById(stickerId) : null;
+    if (!item) return;
+    const chatId = state.activeChatId;
+    const replyToId = state.replyTo ? state.replyTo.id : null;
+    state.sending = true;
+    try {
+      const data = await api(`/api/chats/${encodeURIComponent(chatId)}/messages`, {
+        method: 'POST',
+        body: { text: '', kind: item.type, sticker: item, replyToId }
+      });
+      clearReply();
+      if (data.message && !state.messages.some((m) => m.id === data.message.id)) {
+        state.messages.push(data.message);
+        renderMessages(true);
+      }
+      playChime('send');
+      await refreshChats();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      state.sending = false;
+    }
+  }
+
+  async function sendRichMediaFile(file, kindHint = 'sticker') {
+    if (!state.activeChatId || !file || state.sending) return;
+    const chatId = state.activeChatId;
+    const replyToId = state.replyTo ? state.replyTo.id : null;
+    const isGif = kindHint === 'gif' || file.type === 'image/gif' || /\.gif$/i.test(file.name || '');
+    const kind = isGif ? 'gif' : 'sticker';
+    const wasFocused = typeof document !== 'undefined' && document.activeElement === els.messageInput;
+    state.sending = true;
+    try {
+      const fd = new FormData();
+      fd.append('text', '');
+      fd.append('kind', kind);
+      if (replyToId) fd.append('replyToId', replyToId);
+      fd.append('files', file, file.name || (isGif ? `keyboard-${Date.now()}.gif` : `sticker-${Date.now()}.png`));
+      const data = await sendWithProgress(`/api/chats/${encodeURIComponent(chatId)}/messages`, fd);
+      clearReply();
+      if (data.message && !state.messages.some((m) => m.id === data.message.id)) {
+        state.messages.push(data.message);
+        renderMessages(true);
+        if (state.infoOpen) renderInfoDrawer();
+      }
+      playChime('send');
+      await refreshChats();
+    } catch (err) {
+      showToast(err.message || 'Failed to send sticker/GIF.', 'error');
+    } finally {
+      state.sending = false;
+      if (wasFocused && els.messageInput && typeof document !== 'undefined' && document.activeElement !== els.messageInput) {
+        try { els.messageInput.focus({ preventScroll: true }); } catch { }
+      }
+    }
+  }
+
+  async function handleIncomingKeyboardMedia(payload) {
+    if (!payload || !payload.url) return;
+    const token = payload.token || '';
+    const cleanupToken = () => {
+      if (token && window.AndroidBridge && typeof window.AndroidBridge.clearSharedFile === 'function') {
+        try { window.AndroidBridge.clearSharedFile(token); } catch { }
+      }
+    };
+    if (!state.me || !state.activeChatId) {
+      cleanupToken();
+      showToast('Open a chat to send stickers or GIFs.', 'info');
+      return;
+    }
+    const isChannelReadOnly = state.activeRoom && state.activeRoom.type === 'channel' && (!Array.isArray(state.activeRoom.admins) || !state.activeRoom.admins.includes(state.me.username));
+    const blockedDm = state.activePeer && (state.activePeer.blockedByMe || state.activePeer.blockedByPeer || state.activePeer.deleted);
+    if (isChannelReadOnly || blockedDm) {
+      cleanupToken();
+      showToast('You cannot send stickers or GIFs in this chat.', 'error');
+      return;
+    }
+    try {
+      const resp = await fetch(payload.url);
+      if (!resp.ok) throw new Error('Could not read keyboard media');
+      const blob = await resp.blob();
+      const mime = payload.mime || blob.type || 'image/gif';
+      const fallbackName = mime.includes('gif') ? `gboard-${Date.now()}.gif` : (mime.includes('webp') ? `sticker-${Date.now()}.webp` : `sticker-${Date.now()}.png`);
+      const file = new File([blob], payload.name || fallbackName, { type: mime });
+      cleanupToken();
+      await sendRichMediaFile(file, payload.kind || (mime.includes('gif') ? 'gif' : 'sticker'));
+    } catch (err) {
+      cleanupToken();
+      showToast(err.message || 'Could not send keyboard sticker/GIF.', 'error');
+    }
   }
 
   function wireEvents() {
@@ -5156,7 +5311,7 @@
         }
       ];
 
-      if (isMine && msg.kind !== 'game' && msg.kind !== 'call') {
+      if (isMine && msg.kind !== 'game' && msg.kind !== 'call' && msg.kind !== 'sticker' && msg.kind !== 'gif' && !msg.sticker) {
         items.push({
           action: 'edit',
           label: 'Edit',
@@ -5767,7 +5922,32 @@
       }
     });
 
-    // Paste images directly from clipboard
+    // Keyboard rich-media insertion (Gboard / SwiftKey / Samsung Keyboard Stickers & GIFs on Mobile Browsers) & Clipboard Paste
+    const handleKeyboardOrPasteFiles = (files, e) => {
+      if (!files || files.length === 0) return false;
+      const first = files[0];
+      const isStickerOrGifMime = /^(image\/(gif|webp|apng|png))$/i.test(first.type || '') || /\.(gif|webp|apng)$/i.test(first.name || '');
+      const hasNoText = !els.messageInput.value.trim();
+      const shouldInstantSend = files.length === 1 && hasNoText && (
+        (isMobileTouchMode() && isStickerOrGifMime) ||
+        first.type === 'image/gif'
+      );
+      if (shouldInstantSend) {
+        if (e && typeof e.preventDefault === 'function') e.preventDefault();
+        const kind = first.type === 'image/gif' || /\.gif$/i.test(first.name || '') ? 'gif' : 'sticker';
+        sendRichMediaFile(first, kind);
+        return true;
+      }
+      addPendingFiles(files);
+      return true;
+    };
+
+    els.messageInput.addEventListener('beforeinput', (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleKeyboardOrPasteFiles(e.dataTransfer.files, e);
+      }
+    });
+
     els.messageInput.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
@@ -5779,7 +5959,7 @@
         }
       }
       if (pastedFiles.length > 0) {
-        addPendingFiles(pastedFiles);
+        handleKeyboardOrPasteFiles(pastedFiles, e);
       }
     });
 
@@ -5810,12 +5990,36 @@
       }
     });
 
-    // Emoji Picker
+    // Emoji, Sticker & GIF Picker
     els.emojiBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      const willOpen = els.emojiPopover.classList.contains('hidden');
       els.emojiPopover.classList.toggle('hidden');
+      if (willOpen) renderPickerBody();
     });
-    els.emojiPopover.addEventListener('click', (e) => {
+    if (els.pickerTabs) {
+      els.pickerTabs.addEventListener('click', (e) => {
+        const tabBtn = e.target.closest('[data-picker-tab]');
+        if (!tabBtn) return;
+        e.stopPropagation();
+        activePickerTab = tabBtn.dataset.pickerTab || 'emoji';
+        renderPickerBody();
+        if (activePickerTab !== 'emoji' && els.pickerSearchInput) {
+          els.pickerSearchInput.focus();
+        }
+      });
+    }
+    if (els.pickerSearchInput) {
+      els.pickerSearchInput.addEventListener('input', () => renderPickerBody());
+    }
+    els.emojiPopover.addEventListener('click', async (e) => {
+      const stickerBtn = e.target.closest('[data-send-sticker]');
+      if (stickerBtn) {
+        const stickerId = stickerBtn.dataset.sendSticker;
+        els.emojiPopover.classList.add('hidden');
+        await sendBuiltInStickerOrGif(stickerId);
+        return;
+      }
       const btn = e.target.closest('[data-insert-emoji]');
       if (!btn) return;
       const emoji = btn.dataset.insertEmoji;
@@ -6123,6 +6327,7 @@
   window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
   window.__telechatOnUpdateStatus = (info) => updateAppUpdateUI(info);
   window.__telechatReceiveShare = (payload) => handleIncomingAndroidShare(payload);
+  window.__telechatReceiveKeyboardMedia = (payload) => handleIncomingKeyboardMedia(payload);
   window.__telechatOpenUpdates = () => {
     openSettingsModal('updates');
     updateAppUpdateUI();

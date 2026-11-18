@@ -1621,12 +1621,24 @@ function createStorage(config) {
       else if (msg.call.status === 'declined') preview = `${icon} • Declined`;
       else if (msg.call.status === 'cancelled') preview = `${icon} • Cancelled`;
       else preview = msg.call.durationSec > 0 ? `${icon} • ${Math.floor(msg.call.durationSec / 60)}:${String(msg.call.durationSec % 60).padStart(2, '0')}` : icon;
+    } else if (msg.sticker) {
+      preview = msg.sticker.type === 'gif'
+        ? `🎞️ GIF${msg.sticker.label ? ` • ${msg.sticker.label}` : ''}`
+        : `${msg.sticker.emoji || '🎭'} Sticker`;
     } else if (msg.text) {
       preview = msg.text.slice(0, 80);
     } else if (atts[0]) {
-      if (atts[0].isImage) preview = '📷 Photo';
-      else if (atts[0].mimeType && atts[0].mimeType.startsWith('audio/')) preview = '🎤 Voice message';
-      else preview = `📎 ${atts[0].originalName}`;
+      if (msg.kind === 'gif' || atts[0].mimeType === 'image/gif' || /\.gif$/i.test(atts[0].originalName || '')) {
+        preview = '🎞️ GIF';
+      } else if (msg.kind === 'sticker') {
+        preview = '🎭 Sticker';
+      } else if (atts[0].isImage) {
+        preview = '📷 Photo';
+      } else if (atts[0].mimeType && atts[0].mimeType.startsWith('audio/')) {
+        preview = '🎤 Voice message';
+      } else {
+        preview = `📎 ${atts[0].originalName}`;
+      }
     }
     return {
       id: msg.id,
@@ -1638,7 +1650,23 @@ function createStorage(config) {
     };
   }
 
-  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', game = null, call = null, forwardedFrom = null, linkPreview = null, allowChannelSystem = false }) {
+  function sanitizeStickerPayload(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') return null;
+    const cleanId = raw.id.trim().slice(0, 64);
+    if (!cleanId) return null;
+    return {
+      id: cleanId,
+      type: raw.type === 'gif' ? 'gif' : 'sticker',
+      pack: typeof raw.pack === 'string' ? raw.pack.trim().slice(0, 32) : undefined,
+      emoji: typeof raw.emoji === 'string' ? raw.emoji.trim().slice(0, 8) : undefined,
+      label: typeof raw.label === 'string' ? raw.label.trim().slice(0, 48) : undefined,
+      sub: typeof raw.sub === 'string' ? raw.sub.trim().slice(0, 48) : undefined,
+      bg: typeof raw.bg === 'string' && raw.bg.length <= 120 && !/[<>"']/.test(raw.bg) ? raw.bg : undefined,
+      anim: typeof raw.anim === 'string' && /^[a-z0-9-]+$/i.test(raw.anim) ? raw.anim.slice(0, 32) : undefined
+    };
+  }
+
+  async function appendChatMessage(chatId, senderUsername, { text = '', files = [], replyToId = null, kind = 'text', sticker = null, game = null, call = null, forwardedFrom = null, linkPreview = null, allowChannelSystem = false }) {
     const folder = chatFolder(chatId);
     if (!folder) {
       const err = new Error('Invalid chat ID.');
@@ -1647,7 +1675,8 @@ function createStorage(config) {
     }
 
     const cleanText = typeof text === 'string' ? text.trim().slice(0, 4000) : '';
-    if (!cleanText && (!files || files.length === 0) && !game && !call) {
+    const cleanSticker = sanitizeStickerPayload(sticker);
+    if (!cleanText && (!files || files.length === 0) && !game && !call && !cleanSticker) {
       const err = new Error('Message text or at least one file is required.');
       err.statusCode = 400;
       throw err;
@@ -1710,7 +1739,11 @@ function createStorage(config) {
 
       const now = new Date().toISOString();
       const mentions = extractMentions(cleanText);
-      const msgKind = game ? 'game' : (call ? 'call' : kind);
+      const allowedKind = kind === 'sticker' || kind === 'gif' ? kind : 'text';
+      const inferredGif = attachments.length === 1 && !cleanText && (attachments[0].mimeType === 'image/gif' || /\.gif$/i.test(attachments[0].originalName || ''));
+      const msgKind = game
+        ? 'game'
+        : (call ? 'call' : (cleanSticker ? cleanSticker.type : (allowedKind !== 'text' ? allowedKind : (inferredGif ? 'gif' : 'text'))));
       const readBy = call && call.status !== 'missed' && Array.isArray(meta.participants)
         ? meta.participants.slice()
         : [senderUsername];
@@ -1725,6 +1758,7 @@ function createStorage(config) {
         replyTo: replySnapshot,
         forwardedFrom: forwardedFrom || undefined,
         linkPreview: linkPreview || undefined,
+        sticker: cleanSticker || undefined,
         game: game || undefined,
         call: call || undefined,
         reactions: {},
@@ -1736,10 +1770,11 @@ function createStorage(config) {
       await writeJsonAtomic(messagesPath, messages);
 
       // Append human-readable line to chat.log
+      const stickerNote = cleanSticker ? ` [${cleanSticker.type}: ${cleanSticker.label || cleanSticker.id}]` : '';
       const attachmentNote = attachments.length
         ? ` ${attachments.map((a) => `[${a.isImage ? 'image' : 'file'}: ${a.originalName} (${a.size}B)]`).join(' ')}`
         : '';
-      const logLine = `[${now}] ${senderUsername}: ${cleanText.replace(/\r?\n/g, ' ')}${attachmentNote}\n`;
+      const logLine = `[${now}] ${senderUsername}: ${cleanText.replace(/\r?\n/g, ' ')}${stickerNote}${attachmentNote}\n`;
       await fsp.appendFile(logPath, logLine, 'utf8');
 
       // Update meta & revive chat visibility for participants on new activity
@@ -2262,11 +2297,13 @@ function createStorage(config) {
       }
 
       const fwdText = orig.text || (orig.game ? `🎮 ${orig.game.title}` : '');
-      if (!fwdText && filesToCopy.length === 0) continue;
+      if (!fwdText && filesToCopy.length === 0 && !orig.sticker) continue;
 
       const { message, meta } = await appendChatMessage(targetChatId, senderUsername, {
         text: fwdText,
         files: filesToCopy,
+        kind: orig.kind || 'text',
+        sticker: orig.sticker || null,
         linkPreview: orig.linkPreview || null,
         forwardedFrom: {
           sender: orig.sender,

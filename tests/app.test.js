@@ -1998,5 +1998,100 @@ test('privacy, safety & account essentials: forgot/change password, account dele
   assert.ok(svg.startsWith('<svg ') && svg.includes('<path d="M'));
 });
 
+test('stickers and GIFs: built-in packs, Gboard/keyboard rich media uploads, previews, and forwarding', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-stk-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage: createStorage(config),
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_k', 'alice.k@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_k', 'bob.k@gmail.com');
+
+  const dmBob = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_k' })
+  })).body.chat.id;
+
+  // 1. Built-in Stickers & GIFs catalog
+  const stkLib = require('../public/stickers');
+  assert.ok(stkLib.STICKERS.length >= 12);
+  assert.ok(stkLib.GIFS.length >= 10);
+  const wave = stkLib.getById('stk_wave');
+  assert.ok(wave && stkLib.renderBubbleHtml(wave).includes('vr-sticker-card'));
+  const ggGif = stkLib.getById('gif_gg');
+  assert.ok(ggGif && stkLib.renderBubbleHtml(ggGif).includes('GIF'));
+  assert.ok(stkLib.searchItems('gif', 'gg').some((x) => x.id === 'gif_gg'));
+
+  // 2. Send built-in Sticker & forward it to Saved Messages
+  const sendStk = await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: '', kind: 'sticker', sticker: wave })
+  });
+  assert.equal(sendStk.status, 201);
+  assert.equal(sendStk.body.message.kind, 'sticker');
+  assert.equal(sendStk.body.message.sticker.id, 'stk_wave');
+
+  const listAfterStk = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(listAfterStk[0].lastMessage.preview, '👋 Sticker');
+
+  const fwdStk = await invokeRouter(handleRequest, `/api/chats/${dmBob}/forward`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetChatIds: ['saved'], messageIds: [sendStk.body.message.id] })
+  });
+  assert.equal(fwdStk.status, 200);
+  assert.equal(fwdStk.body.count, 1);
+
+  // 3. Keyboard (Gboard/SwiftKey) GIF upload via multipart (image/gif)
+  const gifBytes = Buffer.from('GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;', 'binary');
+  const boundaryGif = '----VRGboardGifBoundary';
+  const bodyGif = Buffer.concat([
+    Buffer.from(`--${boundaryGif}\r\nContent-Disposition: form-data; name="kind"\r\n\r\ngif\r\n`),
+    Buffer.from(`--${boundaryGif}\r\nContent-Disposition: form-data; name="files"; filename="gboard.gif"\r\nContent-Type: image/gif\r\n\r\n`),
+    gifBytes,
+    Buffer.from(`\r\n--${boundaryGif}--\r\n`)
+  ]);
+  const uploadGif = await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { Cookie: bob.cookie, 'Content-Type': `multipart/form-data; boundary=${boundaryGif}` },
+    body: bodyGif
+  });
+  assert.equal(uploadGif.status, 201);
+  assert.equal(uploadGif.body.message.kind, 'gif');
+  assert.equal(uploadGif.body.message.attachments[0].mimeType, 'image/gif');
+
+  const listAfterGif = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(listAfterGif.find((c) => c.id === dmBob).lastMessage.preview, '🎞️ GIF');
+
+  // 4. Keyboard (Gboard) WebP Sticker upload
+  const webpBytes = Buffer.from('RIFF\x1a\x00\x00\x00WEBPVP8L', 'binary');
+  const boundaryWebp = '----VRGboardWebpBoundary';
+  const bodyWebp = Buffer.concat([
+    Buffer.from(`--${boundaryWebp}\r\nContent-Disposition: form-data; name="kind"\r\n\r\nsticker\r\n`),
+    Buffer.from(`--${boundaryWebp}\r\nContent-Disposition: form-data; name="files"; filename="sticker.webp"\r\nContent-Type: image/webp\r\n\r\n`),
+    webpBytes,
+    Buffer.from(`\r\n--${boundaryWebp}--\r\n`)
+  ]);
+  const uploadWebp = await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { Cookie: alice.cookie, 'Content-Type': `multipart/form-data; boundary=${boundaryWebp}` },
+    body: bodyWebp
+  });
+  assert.equal(uploadWebp.status, 201);
+  assert.equal(uploadWebp.body.message.kind, 'sticker');
+
+  const listAfterWebp = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(listAfterWebp.find((c) => c.id === dmBob).lastMessage.preview, '🎭 Sticker');
+});
+
+
 
 
