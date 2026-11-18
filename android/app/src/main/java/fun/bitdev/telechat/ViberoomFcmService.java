@@ -40,11 +40,13 @@ public class ViberoomFcmService extends FirebaseMessagingService {
         MessageService.ensureNotificationChannels(this);
 
         Map<String, String> data = remoteMessage.getData();
-        String type = data.getOrDefault("type", "message");
-        String chatId = data.getOrDefault("chatId", "");
-        String msgId = data.getOrDefault("messageId", "");
-        String title = data.getOrDefault("title", data.getOrDefault("senderName", "VibeRoom"));
-        String body = data.getOrDefault("body", data.getOrDefault("preview", "New message"));
+        String type = getStr(data, "type", "message");
+        String chatId = getStr(data, "chatId", "");
+        String msgId = getStr(data, "messageId", "");
+        String senderName = getStr(data, "senderName", "VibeRoom");
+        String preview = getStr(data, "preview", "New message");
+        String title = getStr(data, "title", senderName);
+        String body = getStr(data, "body", preview);
 
         if (remoteMessage.getNotification() != null) {
             if (remoteMessage.getNotification().getTitle() != null) {
@@ -68,5 +70,11 @@ public class ViberoomFcmService extends FirebaseMessagingService {
         }
 
         MessageService.showMessageNotification(this, title, body, chatId, "", "");
+    }
+
+    private static String getStr(Map<String, String> map, String key, String fallback) {
+        if (map == null || key == null) return fallback;
+        String val = map.get(key);
+        return (val != null && !val.isEmpty()) ? val : fallback;
     }
 }

@@ -52,7 +52,7 @@ jobs:
           GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
         run: |
           if [ -n "$GOOGLE_SERVICES_JSON_B64" ]; then
-            echo "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > android/app/google-services.json
+            printf '%s' "$GOOGLE_SERVICES_JSON_B64" | tr -d '\r\n ' | base64 -d > android/app/google-services.json
             echo "Loaded google-services.json for FCM push."
           else
             echo "No GOOGLE_SERVICES_JSON_B64 secret set; building with SSE/JobService notification fallback."
