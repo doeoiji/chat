@@ -2092,6 +2092,107 @@ test('stickers and GIFs: built-in packs, Gboard/keyboard rich media uploads, pre
   assert.equal(listAfterWebp.find((c) => c.id === dmBob).lastMessage.preview, '🎭 Sticker');
 });
 
+test('chat archive and unarchive lifecycle: single, bulk, Saved Messages protection, and delete cleanup', async (t) => {
+  const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-arch-test-'));
+  const config = createConfig({ dataDir: tempDataDir, skipDotEnv: true, smtp: null });
+  const storage = createStorage(config);
+  const handleRequest = createRouter({
+    config,
+    auth: createAuthHelpers(config),
+    storage,
+    hub: createRealtimeHub(),
+    mailer: createMailer(config)
+  });
+  t.after(() => fs.rmSync(tempDataDir, { recursive: true, force: true }));
+
+  const alice = await registerTestUser(handleRequest, 'alice_ar', 'alice.ar@gmail.com');
+  const bob = await registerTestUser(handleRequest, 'bob_ar', 'bob.ar@gmail.com');
+  const carol = await registerTestUser(handleRequest, 'carol_ar', 'carol.ar@gmail.com');
+
+  const dmBob = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_ar' })
+  })).body.chat.id;
+  const dmCarol = (await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'carol_ar' })
+  })).body.chat.id;
+
+  // Send initial messages so both DMs appear in /api/chats
+  await invokeRouter(handleRequest, `/api/chats/${dmBob}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Hey Bob' })
+  });
+  await invokeRouter(handleRequest, `/api/chats/${dmCarol}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ text: 'Hey Carol' })
+  });
+  const savedOpen = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ type: 'saved' })
+  });
+  const savedId = savedOpen.body.chat.id;
+
+  // 1. Archive dmBob for Alice -> isArchived true for Alice, still false for Bob
+  const archBob = await invokeRouter(handleRequest, `/api/chats/${dmBob}/prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ archived: true })
+  });
+  assert.equal(archBob.status, 200);
+  assert.equal(archBob.body.isArchived, true);
+
+  const aliceChats1 = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(aliceChats1.find((c) => c.id === dmBob).isArchived, true);
+  assert.equal(aliceChats1.find((c) => c.id === dmCarol).isArchived, false);
+
+  const bobChats1 = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: bob.cookie } })).body.chats;
+  assert.equal(bobChats1.find((c) => c.id === dmBob).isArchived, false);
+
+  const reopenBob = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ targetUsername: 'bob_ar' })
+  });
+  assert.equal(reopenBob.body.chat.isArchived, true);
+
+  // 2. Bulk archive including Saved Messages -> Saved Messages never archives
+  const bulkArch = await invokeRouter(handleRequest, '/api/chats/bulk-prefs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ chatIds: [dmBob, dmCarol, savedId], archived: true })
+  });
+  assert.equal(bulkArch.status, 200);
+  const aliceChats2 = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  assert.equal(aliceChats2.find((c) => c.id === dmBob).isArchived, true);
+  assert.equal(aliceChats2.find((c) => c.id === dmCarol).isArchived, true);
+  assert.equal(aliceChats2.find((c) => c.id === savedId).isArchived, false);
+
+  // 3. Unarchive dmBob via single prefs and dmCarol via bulk prefs
+  const unarchBob = await invokeRouter(handleRequest, `/api/chats/${dmBob}/prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ archived: false })
+  });
+  assert.equal(unarchBob.status, 200);
+  assert.equal(unarchBob.body.isArchived, false);
+
+  // Delete dmCarol while archived -> archivedChats preference cleans up
+  const delCarol = await invokeRouter(handleRequest, `/api/chats/${dmCarol}?forEveryone=0`, {
+    method: 'DELETE',
+    headers: { Cookie: alice.cookie }
+  });
+  assert.equal(delCarol.status, 200);
+  const prefsAfterDelete = await storage.getUserChatPrefs('alice_ar');
+  assert.equal(prefsAfterDelete.archivedChats.includes(dmCarol), false);
+});
+
+
 
 
 

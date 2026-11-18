@@ -177,6 +177,7 @@
     chatSelectCount: $('chat-select-count'),
     chatSelPinBtn: $('chat-sel-pin-btn'),
     chatSelMuteBtn: $('chat-sel-mute-btn'),
+    chatSelArchiveBtn: $('chat-sel-archive-btn'),
     chatSelDeleteBtn: $('chat-sel-delete-btn'),
     chatSelCancelBtn: $('chat-sel-cancel-btn'),
     shareTargetBanner: $('share-target-banner'),
@@ -271,6 +272,7 @@
     infoChatPrefs: $('info-chat-prefs'),
     infoPinChatBtn: $('info-pin-chat-btn'),
     infoMuteChatBtn: $('info-mute-chat-btn'),
+    infoArchiveChatBtn: $('info-archive-chat-btn'),
     infoFriendControls: $('info-friend-controls'),
     infoSafetyControls: $('info-safety-controls'),
     infoBlockBtn: $('info-block-btn'),
@@ -462,7 +464,7 @@
   }
 
   function updateGlobalUnreadCounters() {
-    const totalUnread = state.chats.reduce((sum, c) => sum + Number(c.unreadCount || 0), 0);
+    const totalUnread = state.chats.reduce((sum, c) => (c.isArchived ? sum : sum + Number(c.unreadCount || 0)), 0);
     if (els.unreadTabBadge) {
       els.unreadTabBadge.textContent = formatCompactCount(totalUnread);
       els.unreadTabBadge.classList.toggle('hidden', totalUnread <= 0);
@@ -1849,11 +1851,16 @@
     }
 
     els.sidebarSectionTitle.classList.add('hidden');
-    const visibleChats = state.sidebarFilter === 'unread'
-      ? state.chats.filter((c) => Number(c.unreadCount || 0) > 0)
-      : state.chats;
+    const archivedChats = state.chats.filter((c) => c.isArchived);
+    const unarchivedChats = state.chats.filter((c) => !c.isArchived);
+    const isArchivedView = state.sidebarFilter === 'archived';
+    const visibleChats = isArchivedView
+      ? archivedChats
+      : (state.sidebarFilter === 'unread'
+        ? unarchivedChats.filter((c) => Number(c.unreadCount || 0) > 0)
+        : unarchivedChats);
 
-    if (state.chats.length === 0) {
+    if (state.chats.length === 0 && !isArchivedView) {
       els.sidebarList.innerHTML = `
         <div class="sidebar-empty">
           No conversations yet.<br/>
@@ -1887,7 +1894,69 @@
       return;
     }
 
-    els.sidebarList.innerHTML = visibleChats.map((chat) => {
+    let headerBannerHtml = '';
+    if (isArchivedView) {
+      headerBannerHtml = `
+        <div class="archived-nav-bar" data-archived-back="1" role="button" tabindex="0">
+          <span class="archived-nav-back">← All Chats</span>
+          <span class="archived-nav-title">📦 Archived (${archivedChats.length})</span>
+        </div>
+      `;
+      if (archivedChats.length === 0) {
+        els.sidebarList.innerHTML = `${headerBannerHtml}
+          <div class="sidebar-empty">
+            No archived chats.<br/>
+            Right-click or long-press a chat to archive it.
+            <div>
+              <button id="empty-all-chats-btn" class="secondary-btn" type="button">Back to All Chats</button>
+            </div>
+          </div>
+        `;
+        const showAllBtn = $('empty-all-chats-btn');
+        if (showAllBtn) {
+          showAllBtn.addEventListener('click', () => {
+            state.sidebarFilter = 'all';
+            renderSidebar();
+          });
+        }
+        return;
+      }
+    } else if (state.sidebarFilter === 'all' && archivedChats.length > 0) {
+      const archivedUnread = archivedChats.reduce((sum, c) => sum + Number(c.unreadCount || 0), 0);
+      const previewNames = archivedChats
+        .slice(0, 3)
+        .map((c) => {
+          if (c.type === 'group' || c.type === 'channel') return c.title || 'Group';
+          return (c.peer && (c.peer.displayName || c.peer.username)) || 'Chat';
+        })
+        .join(', ');
+      const extraCount = archivedChats.length > 3 ? ` +${archivedChats.length - 3}` : '';
+      headerBannerHtml = `
+        <div class="chat-row archived-folder-row" data-open-archived="1" role="button" tabindex="0">
+          <div class="avatar-wrap">
+            <div class="avatar archived-avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="21 8 21 21 3 21 3 8"/>
+                <rect x="1" y="3" width="22" height="5"/>
+                <line x1="10" y1="12" x2="14" y2="12"/>
+              </svg>
+            </div>
+          </div>
+          <div class="chat-row-body">
+            <div class="chat-row-top">
+              <span class="chat-row-name">Archived Chats</span>
+              <span class="chat-row-time">${archivedChats.length} chat${archivedChats.length === 1 ? '' : 's'}</span>
+            </div>
+            <div class="chat-row-bottom">
+              <span class="chat-row-preview">${escapeHtml(previewNames + extraCount)}</span>
+              ${archivedUnread > 0 ? `<span class="unread-badge muted">${escapeHtml(formatCompactCount(archivedUnread))}</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    const rowsHtml = visibleChats.map((chat) => {
       const isSaved = chat.type === 'saved';
       const isRoom = chat.type === 'group' || chat.type === 'channel';
       const peer = chat.peer;
@@ -1929,6 +1998,9 @@
       const selectChatChk = state.chatSelectMode
         ? `<span class="chat-select-check">${isChatSelected ? '✓' : ''}</span>`
         : '';
+      const unarchiveBtnHtml = isArchivedView && !state.chatSelectMode
+        ? `<button type="button" class="chat-unarchive-btn" data-quick-unarchive="${escapeHtml(chat.id)}" title="Unarchive chat">Unarchive</button>`
+        : '';
 
       return `
         <div class="chat-row ${isActive ? 'active' : ''}${chat.isPinned ? ' is-pinned' : ''}${state.chatSelectMode ? ' select-mode' : ''}${isChatSelected ? ' selected' : ''}" data-chat-id="${escapeHtml(chat.id)}" ${openAttr} role="listitem" tabindex="0">
@@ -1946,12 +2018,19 @@
             </div>
             <div class="chat-row-bottom">
               <span class="chat-row-preview">${previewHtml}</span>
+              ${unarchiveBtnHtml}
               ${unread > 0 ? `<span class="unread-badge${chat.isMuted ? ' muted' : ''}">${escapeHtml(formatCompactCount(unread))}</span>` : ''}
             </div>
           </div>
         </div>
       `;
     }).join('');
+
+    const emptyAllWithArchive = !isArchivedView && visibleChats.length === 0 && archivedChats.length > 0
+      ? `<div class="sidebar-empty">All your chats are in <strong>Archived Chats</strong> above.</div>`
+      : '';
+
+    els.sidebarList.innerHTML = `${headerBannerHtml}${rowsHtml}${emptyAllWithArchive}`;
   }
 
   let searchTimer = null;
@@ -2397,21 +2476,221 @@
     `;
   }
 
+  let renderedMessagesChatId = null;
+  let messageScratchEl = null;
+
+  function parseMessageHtmlNode(html) {
+    if (!messageScratchEl) messageScratchEl = document.createElement('div');
+    messageScratchEl.innerHTML = html.trim();
+    const node = messageScratchEl.firstElementChild;
+    if (node && node.parentNode) messageScratchEl.removeChild(node);
+    return node;
+  }
+
+  function triggerTransientClass(node, className, durationMs, timerKey) {
+    if (!node || !node.classList) return;
+    if (node[timerKey]) clearTimeout(node[timerKey]);
+    node.classList.remove(className);
+    if (typeof node.offsetWidth === 'number') void node.offsetWidth;
+    node.classList.add(className);
+    node[timerKey] = setTimeout(() => {
+      node.classList.remove(className);
+      node[timerKey] = null;
+    }, durationMs);
+  }
+
+  function snapshotReactionChips(container) {
+    const map = new Map();
+    if (!container || typeof container.querySelectorAll !== 'function') return map;
+    for (const chip of container.querySelectorAll('.reaction-chip[data-emoji]')) {
+      const emoji = chip.getAttribute('data-emoji') || '';
+      const countEl = chip.querySelector('span');
+      const count = countEl ? Number(countEl.textContent) || 1 : 1;
+      map.set(emoji, { count, mine: chip.classList.contains('mine') });
+    }
+    return map;
+  }
+
+  function animateChangedReactionChips(container, prevMap) {
+    if (!container || typeof container.querySelectorAll !== 'function') return;
+    for (const chip of container.querySelectorAll('.reaction-chip[data-emoji]')) {
+      const emoji = chip.getAttribute('data-emoji') || '';
+      const prev = prevMap ? prevMap.get(emoji) : null;
+      const countEl = chip.querySelector('span');
+      const count = countEl ? Number(countEl.textContent) || 1 : 1;
+      const mine = chip.classList.contains('mine');
+      if (!prev || (mine && !prev.mine) || count > prev.count) {
+        triggerTransientClass(chip, 'reaction-pop', 320, '_reactAnimTimer');
+      }
+    }
+  }
+
+  function syncRowOuterState(existingEl, item) {
+    const preserved = [];
+    for (const cls of ['msg-enter', 'msg-updated', 'highlight-pulse', 'search-match', 'menu-active']) {
+      if (existingEl.classList.contains(cls)) preserved.push(cls);
+    }
+    existingEl.className = `${item.baseClassName}${preserved.length ? ' ' + preserved.join(' ') : ''}`;
+    let checkEl = existingEl.querySelector(':scope > .msg-select-check');
+    if (!checkEl) {
+      for (const child of Array.from(existingEl.children || [])) {
+        if (child.classList && child.classList.contains('msg-select-check')) {
+          checkEl = child;
+          break;
+        }
+      }
+    }
+    if (state.selectMode) {
+      if (!checkEl) {
+        checkEl = document.createElement('span');
+        checkEl.className = 'msg-select-check';
+        existingEl.insertBefore(checkEl, existingEl.firstElementChild || null);
+      }
+      checkEl.textContent = item.isSelected ? '✓' : '';
+    } else if (checkEl) {
+      checkEl.remove();
+    }
+  }
+
+  function patchReadTicksInPlace(existingBubble, nextBubble) {
+    const existingTicks = existingBubble.querySelector('.read-ticks');
+    const nextTicks = nextBubble.querySelector('.read-ticks');
+    if (existingTicks && nextTicks) {
+      const becameRead = !existingTicks.classList.contains('read') && nextTicks.classList.contains('read');
+      existingTicks.className = nextTicks.className;
+      existingTicks.title = nextTicks.title;
+      existingTicks.textContent = nextTicks.textContent;
+      if (becameRead) {
+        triggerTransientClass(existingTicks, 'read-pop', 340, '_tickAnimTimer');
+      }
+    } else if (!existingTicks && nextTicks) {
+      const footer = existingBubble.querySelector('.msg-footer');
+      if (footer) footer.appendChild(nextTicks);
+    }
+  }
+
+  function patchBubbleReactionsInPlace(existingBubble, nextBubble) {
+    const prevMap = snapshotReactionChips(existingBubble);
+    const prevReactions = existingBubble.querySelector('.msg-reactions');
+    const nextReactions = nextBubble.querySelector('.msg-reactions');
+    if (!nextReactions) {
+      if (prevReactions) prevReactions.remove();
+      return;
+    }
+    if (prevReactions) {
+      prevReactions.replaceWith(nextReactions);
+    } else {
+      const footer = existingBubble.querySelector('.msg-footer');
+      if (footer) existingBubble.insertBefore(nextReactions, footer);
+      else existingBubble.appendChild(nextReactions);
+    }
+    animateChangedReactionChips(existingBubble, prevMap);
+  }
+
+  function patchBubbleKeepingMedia(existingBubble, nextBubble) {
+    const kept = existingBubble.querySelector('.msg-attachments') || existingBubble.querySelector('.vr-sticker-card');
+    const keptSelector = kept
+      ? (kept.classList.contains('msg-attachments') ? '.msg-attachments' : '.vr-sticker-card')
+      : '';
+    const nextKept = keptSelector ? nextBubble.querySelector(keptSelector) : null;
+    existingBubble.className = nextBubble.className;
+    if (!kept || !nextKept) {
+      existingBubble.innerHTML = nextBubble.innerHTML;
+      return;
+    }
+    const nextNodes = Array.from(nextBubble.childNodes);
+    const pivotIdx = nextNodes.indexOf(nextKept);
+    for (const child of Array.from(existingBubble.childNodes)) {
+      if (child !== kept) existingBubble.removeChild(child);
+    }
+    for (let j = 0; j < pivotIdx; j++) {
+      existingBubble.insertBefore(nextNodes[j], kept);
+    }
+    for (let j = pivotIdx + 1; j < nextNodes.length; j++) {
+      existingBubble.appendChild(nextNodes[j]);
+    }
+  }
+
+  function updateExistingMessageRow(existingEl, item) {
+    const contentChanged = existingEl.dataset.contentSig !== item.contentSig;
+    const mediaChanged = existingEl.dataset.mediaSig !== item.mediaSig;
+    const reactionsChanged = existingEl.dataset.reactionsSig !== item.reactionsSig;
+    const readChanged = existingEl.dataset.readSig !== item.readSig;
+    const metaChanged = existingEl.dataset.metaSig !== item.metaSig;
+
+    if (metaChanged) syncRowOuterState(existingEl, item);
+
+    if (contentChanged || mediaChanged || reactionsChanged || readChanged) {
+      const nextEl = parseMessageHtmlNode(item.html);
+      const existingBubble = existingEl.querySelector('.msg-bubble');
+      const nextBubble = nextEl ? nextEl.querySelector('.msg-bubble') : null;
+      if (!existingBubble || !nextBubble) {
+        if (nextEl) existingEl.innerHTML = nextEl.innerHTML;
+      } else if (!contentChanged && !mediaChanged && !reactionsChanged && readChanged) {
+        patchReadTicksInPlace(existingBubble, nextBubble);
+      } else if (!contentChanged && !mediaChanged && reactionsChanged) {
+        patchBubbleReactionsInPlace(existingBubble, nextBubble);
+        if (readChanged) patchReadTicksInPlace(existingBubble, nextBubble);
+      } else {
+        const prevReactionsMap = reactionsChanged ? snapshotReactionChips(existingBubble) : null;
+        if (!mediaChanged) {
+          patchBubbleKeepingMedia(existingBubble, nextBubble);
+        } else {
+          existingBubble.className = nextBubble.className;
+          existingBubble.innerHTML = nextBubble.innerHTML;
+        }
+        if (reactionsChanged) animateChangedReactionChips(existingBubble, prevReactionsMap);
+        triggerTransientClass(existingEl, 'msg-updated', 560, '_updateAnimTimer');
+      }
+    }
+
+    existingEl.dataset.renderSig = item.renderSig;
+    existingEl.dataset.metaSig = item.metaSig;
+    existingEl.dataset.contentSig = item.contentSig;
+    existingEl.dataset.mediaSig = item.mediaSig;
+    existingEl.dataset.reactionsSig = item.reactionsSig;
+    existingEl.dataset.readSig = item.readSig;
+  }
+
+  function stampMessageDataset(node, item) {
+    node.dataset.domKey = item.domKey;
+    node.dataset.renderSig = item.renderSig;
+    if (item.isMsgRow) {
+      node.dataset.metaSig = item.metaSig;
+      node.dataset.contentSig = item.contentSig;
+      node.dataset.mediaSig = item.mediaSig;
+      node.dataset.reactionsSig = item.reactionsSig;
+      node.dataset.readSig = item.readSig;
+    }
+  }
+
   function renderMessages(scrollToBottom = false) {
     const msgs = state.messages;
     const isSaved = state.activeChatMeta && state.activeChatMeta.type === 'saved';
     const roomTitle = isSaved
       ? 'Saved Messages'
       : (state.activeRoom ? (state.activeRoom.title || 'this room') : (state.activePeer ? (state.activePeer.displayName || state.activePeer.username) : 'this chat'));
+    const emptyHtml = isSaved
+      ? `<div class="date-separator" data-dom-key="empty:state">Save notes, links, and files here to access them anywhere! 📌</div>`
+      : `<div class="date-separator" data-dom-key="empty:state">No messages yet — say hi to ${escapeHtml(roomTitle)}! 👋</div>`;
+
+    const canIncrementalDom = Boolean(
+      typeof document !== 'undefined' &&
+      typeof document.createElement === 'function' &&
+      els.messagesList &&
+      typeof els.messagesList.insertBefore === 'function'
+    );
+    const activeId = state.activeChatId || null;
+    const isSameChat = canIncrementalDom && activeId !== null && renderedMessagesChatId === activeId;
+    if (canIncrementalDom) renderedMessagesChatId = activeId;
+
     if (msgs.length === 0) {
-      els.messagesList.innerHTML = isSaved
-        ? `<div class="date-separator">Save notes, links, and files here to access them anywhere! 📌</div>`
-        : `<div class="date-separator">No messages yet — say hi to ${escapeHtml(roomTitle)}! 👋</div>`;
+      els.messagesList.innerHTML = emptyHtml;
       return;
     }
 
     let lastDateStr = '';
-    const htmlParts = [];
+    const items = [];
     const roomProfiles = state.activeRoom && Array.isArray(state.activeRoom.members)
       ? new Map(state.activeRoom.members.filter((p) => p && p.username).map((p) => [p.username, p]))
       : null;
@@ -2424,15 +2703,33 @@
       const dateStr = new Date(msg.createdAt).toDateString();
       if (dateStr !== lastDateStr) {
         lastDateStr = dateStr;
-        htmlParts.push(`<div class="date-separator">${escapeHtml(formatDateSeparator(msg.createdAt))}</div>`);
+        const dateLabel = formatDateSeparator(msg.createdAt);
+        items.push({
+          domKey: `sep:${dateStr}`,
+          renderSig: dateLabel,
+          isMsgRow: false,
+          html: `<div class="date-separator">${escapeHtml(dateLabel)}</div>`
+        });
       }
 
       if (state.firstUnreadMsgId && msg.id === state.firstUnreadMsgId) {
-        htmlParts.push('<div class="unread-divider">Unread Messages</div>');
+        items.push({
+          domKey: 'unread:divider',
+          renderSig: state.firstUnreadMsgId,
+          isMsgRow: false,
+          html: '<div class="unread-divider">Unread Messages</div>'
+        });
       }
 
       if (msg.kind === 'system' || msg.sender === 'system') {
-        htmlParts.push(`<div class="msg-system-pill" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">${escapeHtml(msg.text || '')}</div>`);
+        const sysText = msg.text || '';
+        items.push({
+          domKey: `msg:${msg.id}`,
+          renderSig: sysText,
+          isMsgRow: false,
+          isSystemPill: true,
+          html: `<div class="msg-system-pill" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">${escapeHtml(sysText)}</div>`
+        });
         continue;
       }
 
@@ -2543,15 +2840,118 @@
         </div>
       `;
 
-      htmlParts.push(`
-        <div class="msg-row ${groupClasses}${state.selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">
+      const baseClassName = `msg-row ${groupClasses}${state.selectMode ? ' select-mode' : ''}${isSelected ? ' selected' : ''}`;
+      const timeLabel = formatTime(msg.createdAt);
+      const metaSig = `${baseClassName}|${timeLabel}|${isMediaStickerBubble ? '1' : '0'}`;
+      const mediaSig = JSON.stringify([msg.kind || '', msg.sticker || null, msg.attachments || null]);
+      const contentSig = JSON.stringify([
+        msg.text || '',
+        msg.editedAt || '',
+        msg.replyTo || null,
+        msg.forwardedFrom || null,
+        msg.linkPreview || null,
+        msg.game || null,
+        msg.call || null,
+        senderHeaderHtml
+      ]);
+      const reactionsSig = JSON.stringify(msg.reactions || null);
+      const readSig = isMine ? (readByOther ? '2' : '1') : '0';
+
+      items.push({
+        domKey: `msg:${msg.id}`,
+        isMsgRow: true,
+        baseClassName,
+        isSelected,
+        metaSig,
+        mediaSig,
+        contentSig,
+        reactionsSig,
+        readSig,
+        renderSig: `${metaSig}||${mediaSig}||${contentSig}||${reactionsSig}||${readSig}`,
+        html: `
+        <div class="${baseClassName}" id="msg-${escapeHtml(msg.id)}" data-msg-id="${escapeHtml(msg.id)}">
           ${selectCheckHtml}
           ${isMine ? actionsHtml + bubbleHtml : bubbleHtml + actionsHtml}
         </div>
-      `);
+      `
+      });
     }
 
-    els.messagesList.innerHTML = htmlParts.join('');
+    if (!canIncrementalDom) {
+      els.messagesList.innerHTML = items.map((i) => i.html).join('');
+    } else if (!isSameChat) {
+      els.messagesList.textContent = '';
+      const frag = document.createDocumentFragment();
+      for (const item of items) {
+        const node = parseMessageHtmlNode(item.html);
+        if (node) {
+          stampMessageDataset(node, item);
+          frag.appendChild(node);
+        }
+      }
+      els.messagesList.appendChild(frag);
+    } else {
+      const existingByKey = new Map();
+      const desiredKeys = new Set(items.map((i) => i.domKey));
+      for (const child of Array.from(els.messagesList.children)) {
+        const key = child.dataset ? child.dataset.domKey : '';
+        if (!key || key.startsWith('__leaving__')) continue;
+        if (!desiredKeys.has(key)) {
+          if (child.classList.contains('msg-row') || child.classList.contains('msg-system-pill')) {
+            child.dataset.domKey = `__leaving__${key}`;
+            child.classList.add('msg-leaving');
+            setTimeout(() => {
+              if (child.parentNode === els.messagesList) child.remove();
+            }, 170);
+          } else {
+            child.remove();
+          }
+          continue;
+        }
+        existingByKey.set(key, child);
+      }
+
+      const desiredNodes = [];
+      for (const item of items) {
+        const existing = existingByKey.get(item.domKey);
+        if (!existing) {
+          const node = parseMessageHtmlNode(item.html);
+          if (!node) continue;
+          stampMessageDataset(node, item);
+          triggerTransientClass(node, 'msg-enter', 280, '_enterAnimTimer');
+          desiredNodes.push(node);
+        } else {
+          if (existing.dataset.renderSig !== item.renderSig) {
+            if (item.isMsgRow) {
+              updateExistingMessageRow(existing, item);
+            } else {
+              const nextEl = parseMessageHtmlNode(item.html);
+              if (nextEl) existing.innerHTML = nextEl.innerHTML;
+              existing.dataset.renderSig = item.renderSig;
+              if (item.isSystemPill) {
+                triggerTransientClass(existing, 'msg-updated', 400, '_updateAnimTimer');
+              }
+            }
+          }
+          desiredNodes.push(existing);
+        }
+      }
+
+      let cursor = els.messagesList.firstElementChild;
+      while (cursor && cursor.classList && cursor.classList.contains('msg-leaving')) {
+        cursor = cursor.nextElementSibling;
+      }
+      for (const node of desiredNodes) {
+        if (node === cursor) {
+          cursor = cursor.nextElementSibling;
+          while (cursor && cursor.classList && cursor.classList.contains('msg-leaving')) {
+            cursor = cursor.nextElementSibling;
+          }
+        } else {
+          els.messagesList.insertBefore(node, cursor || null);
+        }
+      }
+    }
 
     if (scrollToBottom) {
       state.pinToBottomUntil = Date.now() + 1800;
@@ -2837,11 +3237,16 @@
       if (chatId === state.activeChatId && state.activeChatMeta) {
         state.activeChatMeta.isPinned = Boolean(res.isPinned);
         state.activeChatMeta.isMuted = Boolean(res.isMuted);
+        state.activeChatMeta.isArchived = Boolean(res.isArchived);
       }
       const c = state.chats.find((x) => x.id === chatId);
       if (c) {
         c.isPinned = Boolean(res.isPinned);
         c.isMuted = Boolean(res.isMuted);
+        c.isArchived = Boolean(res.isArchived);
+      }
+      if (state.sidebarFilter === 'archived' && !state.chats.some((x) => x.isArchived)) {
+        state.sidebarFilter = 'all';
       }
       if (state.infoOpen) renderInfoDrawer();
       await refreshChats();
@@ -2882,6 +3287,7 @@
     const toggleable = selected.filter((c) => c.type !== 'saved');
     const allMuted = toggleable.length > 0 && toggleable.every((c) => c.isMuted);
     const allPinned = toggleable.length > 0 && toggleable.every((c) => c.isPinned);
+    const allArchived = toggleable.length > 0 && toggleable.every((c) => c.isArchived);
     if (els.chatSelPinBtn) {
       els.chatSelPinBtn.disabled = toggleable.length === 0;
       els.chatSelPinBtn.textContent = allPinned ? '📌 Unpin' : '📌 Pin';
@@ -2891,6 +3297,11 @@
       els.chatSelMuteBtn.disabled = toggleable.length === 0;
       els.chatSelMuteBtn.textContent = allMuted ? '🔔 Unmute' : '🔇 Mute';
       els.chatSelMuteBtn.dataset.nextMuted = allMuted ? '0' : '1';
+    }
+    if (els.chatSelArchiveBtn) {
+      els.chatSelArchiveBtn.disabled = toggleable.length === 0;
+      els.chatSelArchiveBtn.textContent = allArchived ? '📤 Unarchive' : '📦 Archive';
+      els.chatSelArchiveBtn.dataset.nextArchived = allArchived ? '0' : '1';
     }
     if (els.chatSelDeleteBtn) {
       els.chatSelDeleteBtn.disabled = count === 0;
@@ -3261,6 +3672,7 @@
         const chatObj = state.chats.find((c) => c.id === state.activeChatId) || state.activeChatMeta || {};
         const isPinnedChat = Boolean(chatObj.isPinned);
         const isMutedChat = Boolean(chatObj.isMuted);
+        const isArchivedChat = Boolean(chatObj.isArchived);
         els.infoChatPrefs.classList.remove('hidden');
         if (els.infoPinChatBtn) {
           els.infoPinChatBtn.textContent = isPinnedChat ? '📌 Unpin Chat' : '📌 Pin Chat';
@@ -3270,6 +3682,11 @@
           els.infoMuteChatBtn.classList.remove('hidden');
           els.infoMuteChatBtn.textContent = isMutedChat ? '🔔 Unmute' : '🔇 Mute';
           els.infoMuteChatBtn.classList.toggle('active', isMutedChat);
+        }
+        if (els.infoArchiveChatBtn) {
+          els.infoArchiveChatBtn.classList.remove('hidden');
+          els.infoArchiveChatBtn.textContent = isArchivedChat ? '📤 Unarchive' : '📦 Archive';
+          els.infoArchiveChatBtn.classList.toggle('active', isArchivedChat);
         }
       }
     }
@@ -3637,12 +4054,12 @@
         }
       } else if (isIncoming) {
         const existingChat = state.chats.find((c) => c.id === data.chatId);
-        const isMutedChat = Boolean(existingChat && existingChat.isMuted);
+        const isSilentChat = Boolean(existingChat && (existingChat.isMuted || existingChat.isArchived));
         if (existingChat) {
           existingChat.unreadCount = Number(existingChat.unreadCount || 0) + 1;
           renderSidebar();
         }
-        if (!isMutedChat) {
+        if (!isSilentChat) {
           playChime('receive');
           showToast(`${senderName}: ${bodyPreview.slice(0, 60)}`);
           notifyIncomingMessage({
@@ -3720,6 +4137,7 @@
       if (data.chatId === state.activeChatId && state.activeChatMeta) {
         state.activeChatMeta.isPinned = Boolean(data.isPinned);
         state.activeChatMeta.isMuted = Boolean(data.isMuted);
+        state.activeChatMeta.isArchived = Boolean(data.isArchived);
         if (state.infoOpen) renderInfoDrawer();
       }
       await refreshChats();
@@ -4830,6 +5248,11 @@
             ? '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>'
             : '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.73 21a2 2 0 0 1-3.46 0"/><path d="M18.63 13A17.89 17.89 0 0 1 18 8"/><path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.33-5"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
         });
+        items.push({
+          action: 'archive',
+          label: chat.isArchived ? 'Unarchive Chat' : 'Archive Chat',
+          icon: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>'
+        });
       }
 
       items.push({
@@ -4879,6 +5302,10 @@
         } else if (action === 'mute') {
           await updateChatPrefs(chatId, { muted: !chat.isMuted });
           showToast(chat.isMuted ? 'Notifications unmuted' : 'Notifications muted', 'success');
+        } else if (action === 'archive') {
+          const nextArchived = !chat.isArchived;
+          await updateChatPrefs(chatId, { archived: nextArchived });
+          showToast(nextArchived ? 'Chat archived' : 'Chat unarchived', 'success');
         } else if (action === 'delete') {
           openDeleteConfirmForChats([chatId]);
         }
@@ -4924,6 +5351,28 @@
         }
       });
     }
+    if (els.chatSelArchiveBtn) {
+      els.chatSelArchiveBtn.addEventListener('click', async () => {
+        const ids = Array.from(state.selectedChatIds);
+        if (ids.length === 0) return;
+        const nextArchived = els.chatSelArchiveBtn.dataset.nextArchived === '1';
+        try {
+          await api('/api/chats/bulk-prefs', {
+            method: 'POST',
+            body: { chatIds: ids, archived: nextArchived }
+          });
+          showToast(nextArchived ? 'Archived selected chats' : 'Unarchived selected chats', 'success');
+          exitChatSelectMode();
+          await refreshChats();
+          if (state.sidebarFilter === 'archived' && !state.chats.some((c) => c.isArchived)) {
+            state.sidebarFilter = 'all';
+            renderSidebar();
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
     if (els.chatSelDeleteBtn) {
       els.chatSelDeleteBtn.addEventListener('click', () => {
         const ids = Array.from(state.selectedChatIds);
@@ -4947,6 +5396,29 @@
     }
     els.sidebarList.addEventListener('click', (e) => {
       if (Date.now() < suppressSidebarClickUntil) return;
+      const openArchivedBtn = e.target.closest('[data-open-archived]');
+      if (openArchivedBtn) {
+        if (state.chatSelectMode) exitChatSelectMode();
+        state.sidebarFilter = 'archived';
+        renderSidebar();
+        return;
+      }
+      const archivedBackBtn = e.target.closest('[data-archived-back]');
+      if (archivedBackBtn) {
+        if (state.chatSelectMode) exitChatSelectMode();
+        state.sidebarFilter = 'all';
+        renderSidebar();
+        return;
+      }
+      const quickUnarchiveBtn = e.target.closest('[data-quick-unarchive]');
+      if (quickUnarchiveBtn) {
+        e.stopPropagation();
+        const cid = quickUnarchiveBtn.dataset.quickUnarchive;
+        if (cid) {
+          updateChatPrefs(cid, { archived: false }).then(() => showToast('Chat unarchived', 'success'));
+        }
+        return;
+      }
       const subBtn = e.target.closest('[data-friends-subtab]');
       if (subBtn) {
         state.friendsSubTab = subBtn.dataset.friendsSubtab || 'friends';
@@ -5020,6 +5492,12 @@
       });
     }
     els.sidebarList.addEventListener('keydown', (e) => {
+      const folderTrigger = e.target.closest('[data-open-archived], [data-archived-back]');
+      if (folderTrigger && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        folderTrigger.click();
+        return;
+      }
       const row = e.target.closest('.chat-row[data-open-chat], .chat-row[data-open-user]');
       if (!row) return;
       if (e.key === 'Enter' || e.key === ' ') {
@@ -5727,6 +6205,15 @@
         if (!state.activeChatId) return;
         const chatObj = state.chats.find((c) => c.id === state.activeChatId) || state.activeChatMeta || {};
         updateChatPrefs(state.activeChatId, { muted: !chatObj.isMuted });
+      });
+    }
+    if (els.infoArchiveChatBtn) {
+      els.infoArchiveChatBtn.addEventListener('click', async () => {
+        if (!state.activeChatId) return;
+        const chatObj = state.chats.find((c) => c.id === state.activeChatId) || state.activeChatMeta || {};
+        const nextArchived = !chatObj.isArchived;
+        await updateChatPrefs(state.activeChatId, { archived: nextArchived });
+        showToast(nextArchived ? 'Chat archived' : 'Chat unarchived', 'success');
       });
     }
 

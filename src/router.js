@@ -874,12 +874,14 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         const prefs = await storage.getUserChatPrefs(me.username);
         const pinnedSet = new Set(prefs.pinnedChats);
         const mutedSet = new Set(prefs.mutedChats);
+        const archivedSet = new Set(prefs.archivedChats);
 
         if (body.chatId && groups.isGroupOrChannelId(body.chatId)) {
           const opened = await groups.openRoom(body.chatId, me.username);
           const metaObj = await storage.getChatMeta(body.chatId);
           opened.chat.isPinned = pinnedSet.has(opened.chat.id);
           opened.chat.isMuted = mutedSet.has(opened.chat.id);
+          opened.chat.isArchived = archivedSet.has(opened.chat.id);
           opened.chat.pinnedMessage = metaObj && metaObj.pinnedMessage ? metaObj.pinnedMessage : null;
           return sendJson(res, 200, opened);
         }
@@ -900,6 +902,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
               peer: null,
               isPinned: true,
               isMuted: mutedSet.has(meta.id),
+              isArchived: false,
               pinnedMessage: meta.pinnedMessage || null,
               createdAt: meta.createdAt,
               updatedAt: meta.updatedAt,
@@ -936,6 +939,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
               peer,
               isPinned: pinnedSet.has(chatId),
               isMuted: mutedSet.has(chatId),
+              isArchived: archivedSet.has(chatId),
               pinnedMessage: null,
               createdAt: null,
               updatedAt: null,
@@ -956,6 +960,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
             peer,
             isPinned: pinnedSet.has(meta.id),
             isMuted: mutedSet.has(meta.id),
+            isArchived: archivedSet.has(meta.id),
             pinnedMessage: meta.pinnedMessage || null,
             createdAt: meta.createdAt,
             updatedAt: meta.updatedAt,
@@ -1330,21 +1335,27 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         return sendJson(res, 200, { pinnedMessage: resPin.pinnedMessage });
       }
 
-      // Bulk pin/mute/unpin/unmute chats
+      // Bulk pin/mute/archive chats
       if (method === 'POST' && pathname === '/api/chats/bulk-prefs') {
         const me = await requireAuth(req, res);
         if (!me) return;
         const body = await readJsonBody(req);
         const resBulk = await storage.setUserChatPrefsBulk(me.username, body.chatIds, {
           pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
-          muted: typeof body.muted === 'boolean' ? body.muted : undefined
+          muted: typeof body.muted === 'boolean' ? body.muted : undefined,
+          archived: typeof body.archived === 'boolean' ? body.archived : undefined
         });
         for (const item of resBulk.items) {
           auditLogger.log({
             action: 'CHAT_PREFS_UPDATED',
             username: me.username,
             req,
-            details: { chatId: item.chatId, isPinned: item.isPinned, isMuted: item.isMuted }
+            details: {
+              chatId: item.chatId,
+              isPinned: item.isPinned,
+              isMuted: item.isMuted,
+              isArchived: item.isArchived
+            }
           });
           hub.emitToUser(me.username, 'chat_prefs_updated', item);
         }
@@ -1420,7 +1431,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         return sendJson(res, 200, { ok: true, chatId: outcome.chatId, forEveryone: outcome.forEveryone });
       }
 
-      // Pin/unpin a chat or mute/unmute notifications per chat
+      // Pin/unpin, mute/unmute, or archive/unarchive a chat
       const chatPrefsMatch = /^\/api\/chats\/([^/]+)\/prefs$/.exec(pathname);
       if (method === 'POST' && chatPrefsMatch) {
         const me = await requireAuth(req, res);
@@ -1429,13 +1440,19 @@ function createRouter({ config, auth, storage, hub, mailer, audit }) {
         const body = await readJsonBody(req);
         const prefsOut = await storage.setUserChatPref(me.username, chatId, {
           pinned: typeof body.pinned === 'boolean' ? body.pinned : undefined,
-          muted: typeof body.muted === 'boolean' ? body.muted : undefined
+          muted: typeof body.muted === 'boolean' ? body.muted : undefined,
+          archived: typeof body.archived === 'boolean' ? body.archived : undefined
         });
         auditLogger.log({
           action: 'CHAT_PREFS_UPDATED',
           username: me.username,
           req,
-          details: { chatId, isPinned: prefsOut.isPinned, isMuted: prefsOut.isMuted }
+          details: {
+            chatId,
+            isPinned: prefsOut.isPinned,
+            isMuted: prefsOut.isMuted,
+            isArchived: prefsOut.isArchived
+          }
         });
         hub.emitToUser(me.username, 'chat_prefs_updated', prefsOut);
         return sendJson(res, 200, prefsOut);

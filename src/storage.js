@@ -1270,6 +1270,9 @@ function createStorage(config) {
             if (Array.isArray(prefs.mutedChats)) {
               prefs.mutedChats = prefs.mutedChats.map((id) => renameMap.get(id) || id);
             }
+            if (Array.isArray(prefs.archivedChats)) {
+              prefs.archivedChats = prefs.archivedChats.map((id) => renameMap.get(id) || id);
+            }
             await writeJsonAtomic(prefsPath, prefs);
           }
         }
@@ -1421,15 +1424,16 @@ function createStorage(config) {
   async function getUserChatPrefs(username) {
     const clean = String(username || '').trim().toLowerCase();
     const folder = userFolder(clean);
-    if (!folder) return { pinnedChats: [], mutedChats: [] };
+    if (!folder) return { pinnedChats: [], mutedChats: [], archivedChats: [] };
     const data = await readJson(path.join(folder, 'chat_prefs.json'), {});
     return {
       pinnedChats: Array.isArray(data && data.pinnedChats) ? data.pinnedChats : [],
-      mutedChats: Array.isArray(data && data.mutedChats) ? data.mutedChats : []
+      mutedChats: Array.isArray(data && data.mutedChats) ? data.mutedChats : [],
+      archivedChats: Array.isArray(data && data.archivedChats) ? data.archivedChats : []
     };
   }
 
-  async function setUserChatPrefsBulk(username, chatIds, { pinned, muted } = {}) {
+  async function setUserChatPrefsBulk(username, chatIds, { pinned, muted, archived } = {}) {
     const clean = String(username || '').trim().toLowerCase();
     const folder = userFolder(clean);
     if (!folder) {
@@ -1443,6 +1447,7 @@ function createStorage(config) {
       const cur = await getUserChatPrefs(clean);
       const pinnedSet = new Set(cur.pinnedChats);
       const mutedSet = new Set(cur.mutedChats);
+      const archivedSet = new Set(cur.archivedChats);
       for (const id of ids) {
         if (typeof pinned === 'boolean') {
           if (pinned) pinnedSet.add(id);
@@ -1452,32 +1457,40 @@ function createStorage(config) {
           if (muted) mutedSet.add(id);
           else mutedSet.delete(id);
         }
+        if (typeof archived === 'boolean') {
+          if (archived && !id.startsWith('saved_')) archivedSet.add(id);
+          else archivedSet.delete(id);
+        }
       }
       const next = {
         pinnedChats: Array.from(pinnedSet),
-        mutedChats: Array.from(mutedSet)
+        mutedChats: Array.from(mutedSet),
+        archivedChats: Array.from(archivedSet)
       };
       await writeJsonAtomic(prefsPath, next);
       return {
         items: ids.map((id) => ({
           chatId: id,
           isPinned: pinnedSet.has(id),
-          isMuted: mutedSet.has(id)
+          isMuted: mutedSet.has(id),
+          isArchived: !id.startsWith('saved_') && archivedSet.has(id)
         })),
         ...next
       };
     });
   }
 
-  async function setUserChatPref(username, chatId, { pinned, muted } = {}) {
-    const res = await setUserChatPrefsBulk(username, [chatId], { pinned, muted });
-    const item = res.items[0] || { chatId, isPinned: false, isMuted: false };
+  async function setUserChatPref(username, chatId, { pinned, muted, archived } = {}) {
+    const res = await setUserChatPrefsBulk(username, [chatId], { pinned, muted, archived });
+    const item = res.items[0] || { chatId, isPinned: false, isMuted: false, isArchived: false };
     return {
       chatId: item.chatId,
       isPinned: item.isPinned,
       isMuted: item.isMuted,
+      isArchived: item.isArchived,
       pinnedChats: res.pinnedChats,
-      mutedChats: res.mutedChats
+      mutedChats: res.mutedChats,
+      archivedChats: res.archivedChats
     };
   }
 
@@ -1511,6 +1524,7 @@ function createStorage(config) {
     const prefs = await getUserChatPrefs(clean);
     const pinnedSet = new Set(prefs.pinnedChats);
     const mutedSet = new Set(prefs.mutedChats);
+    const archivedSet = new Set(prefs.archivedChats);
     const chats = [];
 
     for (const entry of entries) {
@@ -1526,6 +1540,7 @@ function createStorage(config) {
       const visibleMeta = getVisibleChatMeta(meta, clean);
       const isPinned = pinnedSet.has(meta.id);
       const isMuted = mutedSet.has(meta.id);
+      const isArchived = meta.type === 'saved' ? false : archivedSet.has(meta.id);
 
       if (meta.type === 'saved') {
         chats.push({
@@ -1536,6 +1551,7 @@ function createStorage(config) {
           peer: null,
           isPinned: true,
           isMuted,
+          isArchived: false,
           pinnedMessage: visibleMeta.pinnedMessage,
           createdAt: meta.createdAt,
           updatedAt: meta.updatedAt,
@@ -1560,6 +1576,7 @@ function createStorage(config) {
           peer: null,
           isPinned,
           isMuted,
+          isArchived,
           pinnedMessage: visibleMeta.pinnedMessage,
           createdAt: meta.createdAt,
           updatedAt: meta.updatedAt,
@@ -1581,6 +1598,7 @@ function createStorage(config) {
         peer,
         isPinned,
         isMuted,
+        isArchived,
         pinnedMessage: visibleMeta.pinnedMessage,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
@@ -2111,8 +2129,13 @@ function createStorage(config) {
       const cur = await getUserChatPrefs(clean);
       const pinnedChats = cur.pinnedChats.filter((id) => id !== chatId);
       const mutedChats = cur.mutedChats.filter((id) => id !== chatId);
-      if (pinnedChats.length !== cur.pinnedChats.length || mutedChats.length !== cur.mutedChats.length) {
-        await writeJsonAtomic(prefsPath, { pinnedChats, mutedChats });
+      const archivedChats = cur.archivedChats.filter((id) => id !== chatId);
+      if (
+        pinnedChats.length !== cur.pinnedChats.length ||
+        mutedChats.length !== cur.mutedChats.length ||
+        archivedChats.length !== cur.archivedChats.length
+      ) {
+        await writeJsonAtomic(prefsPath, { pinnedChats, mutedChats, archivedChats });
       }
     });
   }
