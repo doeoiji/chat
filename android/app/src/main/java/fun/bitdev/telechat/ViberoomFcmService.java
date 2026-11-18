@@ -58,7 +58,25 @@ public class ViberoomFcmService extends FirebaseMessagingService {
         }
 
         if ("call".equals(type)) {
-            MessageService.showIncomingCallNotification(this, title, "audio", chatId);
+            String callId = getStr(data, "callId", "");
+            String callMode = getStr(data, "callMode", "audio");
+            String callerName = getStr(data, "callerName", title);
+            String avatarUrl = getStr(data, "avatarUrl", "");
+            String avatarColor = getStr(data, "avatarColor", "");
+            MessageService.showIncomingCallNotification(
+                this,
+                callerName,
+                callMode,
+                chatId,
+                callId,
+                avatarUrl,
+                avatarColor
+            );
+            return;
+        }
+        if ("call_ended".equals(type)) {
+            String callId = getStr(data, "callId", "");
+            MessageService.cancelIncomingCallNotification(this, callId);
             return;
         }
 

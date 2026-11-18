@@ -1757,7 +1757,9 @@ function createStorage(config) {
       preview = `🎮 ${msg.game.title || msg.game.type}`;
     } else if (msg.call) {
       const icon = msg.call.mode === 'video' ? '📹 Video call' : '📞 Audio call';
-      if (msg.call.status === 'missed') preview = `${icon} • Missed`;
+      if (msg.call.status === 'ringing') preview = `${icon} • Incoming call`;
+      else if (msg.call.status === 'active') preview = `${icon} • Ongoing call`;
+      else if (msg.call.status === 'missed') preview = `${icon} • Missed`;
       else if (msg.call.status === 'declined') preview = `${icon} • Declined`;
       else if (msg.call.status === 'cancelled') preview = `${icon} • Cancelled`;
       else preview = msg.call.durationSec > 0 ? `${icon} • ${Math.floor(msg.call.durationSec / 60)}:${String(msg.call.durationSec % 60).padStart(2, '0')}` : icon;
@@ -2269,6 +2271,37 @@ function createStorage(config) {
       const logPath = path.join(folder, 'chat.log');
       await fsp.appendFile(logPath, `[${now}] SYSTEM: ${username} edited message ${messageId}\n`, 'utf8').catch(() => {});
       return { message: msg, saveMessages: true, saveMeta };
+    });
+  }
+
+  async function updateChatCallMessage(chatId, messageId, { text, status, durationSec = 0, markUnreadForUsername = null } = {}) {
+    if (!chatId || !messageId) return null;
+    return mutateChatMessages(chatId, ({ meta, messages }) => {
+      const msg = messages.find((m) => m.id === messageId && m.call);
+      if (!msg) return null;
+      if (typeof text === 'string' && text.trim()) {
+        msg.text = text.trim();
+      }
+      if (status) {
+        msg.call.status = status;
+      }
+      if (typeof durationSec === 'number' && Number.isFinite(durationSec)) {
+        msg.call.durationSec = Math.max(0, Math.round(durationSec));
+      }
+      if (Array.isArray(msg.readBy) && status !== 'ringing' && status !== 'missed') {
+        for (const p of meta.participants || []) {
+          if (!msg.readBy.includes(p)) msg.readBy.push(p);
+        }
+      }
+      meta.updatedAt = new Date().toISOString();
+      if (!meta.lastMessage || meta.lastMessage.id === msg.id) {
+        meta.lastMessage = buildLastMessageSummary(msg, meta);
+      }
+      if (markUnreadForUsername && Array.isArray(meta.participants) && meta.participants.includes(markUnreadForUsername)) {
+        meta.unreadCounts = meta.unreadCounts || {};
+        meta.unreadCounts[markUnreadForUsername] = (meta.unreadCounts[markUnreadForUsername] || 0) + 1;
+      }
+      return { message: msg, saveMessages: true, saveMeta: true };
     });
   }
 
@@ -3188,6 +3221,7 @@ function createStorage(config) {
     getMessages,
     appendChatMessage,
     editMessage,
+    updateChatCallMessage,
     setMessageLinkPreview,
     pinMessage,
     markChatRead,

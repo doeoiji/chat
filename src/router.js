@@ -78,7 +78,7 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
   const stranger = createStrangerService({ hub, storage, friends });
   const games = createGamesService({ storage, friends });
   const polls = createPollsService({ storage });
-  const calls = createCallsService({ hub, storage, audit: auditLogger });
+  const calls = createCallsService({ hub, storage, audit: auditLogger, pushService });
 
   function emitSanitizedMessageEvent(participants, eventName, chatId, rawMessage, extra = {}) {
     if (!Array.isArray(participants) || !rawMessage) return;
@@ -2144,6 +2144,13 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
         return sendJson(res, 200, { iceServers: calls.getIceServers() });
       }
 
+      if (method === 'GET' && pathname === '/api/calls/active') {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const activeCall = await calls.getActiveCallForUser(me.username);
+        return sendJson(res, 200, { activeCall });
+      }
+
       if (method === 'POST' && pathname === '/api/calls/start') {
         const me = await requireAuth(req, res);
         if (!me) return;
@@ -2169,13 +2176,32 @@ function createRouter({ config, auth, storage, hub, mailer, audit, push }) {
           details: { callId: result.call.id, target: result.call.callee, mode: result.call.mode }
         });
         pushService.notifyUser(result.call.callee, {
-          title: `Incoming ${result.call.mode === 'video' ? 'Video' : 'Audio'} Call`,
-          body: `${me.displayName || me.username} is calling you on VibeRoom`,
+          type: 'call',
+          title: me.displayName || me.username,
+          body: `Incoming ${result.call.mode === 'video' ? 'Video' : 'Audio'} Call`,
           tag: `call_${result.call.id}`,
           urgency: 'high',
-          data: { chatId: result.call.chatId || '', sender: me.username, type: 'call' }
+          data: {
+            type: 'call',
+            callId: result.call.id,
+            mode: result.call.mode,
+            chatId: result.call.chatId || '',
+            sender: me.username,
+            callerName: me.displayName || me.username,
+            avatarUrl: me.avatarUrl || '',
+            avatarColor: me.avatarColor || ''
+          }
         }, { chatId: result.call.chatId || null }).catch(() => {});
         return sendJson(res, 201, result);
+      }
+
+      const callSignalsMatch = /^\/api\/calls\/([^/]+)\/signals$/.exec(pathname);
+      if (method === 'GET' && callSignalsMatch) {
+        const me = await requireAuth(req, res);
+        if (!me) return;
+        const callId = callSignalsMatch[1];
+        const since = Number(urlObj.searchParams.get('since') || 0) || 0;
+        return sendJson(res, 200, { signals: calls.getBufferedSignals(callId, me.username, since) });
       }
 
       const callActionMatch = /^\/api\/calls\/([^/]+)\/(accept|signal|decline|end)$/.exec(pathname);

@@ -23,6 +23,9 @@ import android.graphics.Paint;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.Icon;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.IBinder;
 import android.webkit.CookieManager;
@@ -45,7 +48,8 @@ import java.util.regex.Pattern;
 public class MessageService extends Service {
 
     public static final String CHANNEL_MESSAGES = "telechat_messages_v2";
-    public static final String CHANNEL_CALLS = "viberoom_calls";
+    public static final String CHANNEL_CALLS = "viberoom_calls_v2";
+    private static final String LEGACY_CALLS_CHANNEL = "viberoom_calls";
     public static final String EXTRA_CHAT_ID = "extra_chat_id";
     private static final int CALL_NOTIF_ID = 303;
     private static final int LEGACY_FOREGROUND_ID = 101;
@@ -236,8 +240,8 @@ public class MessageService extends Service {
                 return;
             }
             if ("call_ended".equals(eventName) || "call_declined".equals(eventName) || "call_accepted".equals(eventName)) {
-                NotificationManager mgr = getSystemService(NotificationManager.class);
-                if (mgr != null) mgr.cancel(CALL_NOTIF_ID);
+                JSONObject endObj = new JSONObject(jsonStr);
+                cancelIncomingCallNotification(this, endObj.optString("callId", ""));
                 return;
             }
             if ("call_incoming".equals(eventName)) {
@@ -245,10 +249,13 @@ public class MessageService extends Service {
                 JSONObject obj = new JSONObject(jsonStr);
                 JSONObject call = obj.optJSONObject("call");
                 JSONObject caller = obj.optJSONObject("callerProfile");
+                String callId = call != null ? call.optString("id", "") : "";
                 String callerName = caller != null ? caller.optString("displayName", call != null ? call.optString("caller", "Someone") : "Someone") : "Someone";
+                String avatarUrl = caller != null && !caller.isNull("avatarUrl") ? caller.optString("avatarUrl", "") : "";
+                String avatarColor = caller != null && !caller.isNull("avatarColor") ? caller.optString("avatarColor", "") : "";
                 String mode = call != null ? call.optString("mode", "audio") : "audio";
                 String chatId = call != null ? call.optString("chatId", "") : "";
-                showIncomingCallNotification(this, callerName, mode, chatId);
+                showIncomingCallNotification(this, callerName, mode, chatId, callId, avatarUrl, avatarColor);
                 return;
             }
             if (!"new_message".equals(eventName)) return;
@@ -257,6 +264,12 @@ public class MessageService extends Service {
             String chatId = obj.optString("chatId", "");
             JSONObject msg = obj.optJSONObject("message");
             if (msg == null) return;
+
+            if ("call".equals(msg.optString("kind", ""))) {
+                JSONObject callObj = msg.optJSONObject("call");
+                String callStatus = callObj != null ? callObj.optString("status", "") : "";
+                if (!"missed".equals(callStatus)) return;
+            }
 
             String msgId = msg.optString("id", "");
             String sender = msg.optString("sender", "");
@@ -337,6 +350,10 @@ public class MessageService extends Service {
         msgChannel.enableLights(true);
         manager.createNotificationChannel(msgChannel);
 
+        try {
+            manager.deleteNotificationChannel(LEGACY_CALLS_CHANNEL);
+        } catch (Exception ignored) {
+        }
         NotificationChannel callChannel = new NotificationChannel(
             CHANNEL_CALLS,
             "Incoming Calls",
@@ -344,7 +361,16 @@ public class MessageService extends Service {
         );
         callChannel.setDescription("Incoming voice and video call alerts");
         callChannel.enableVibration(true);
+        callChannel.setVibrationPattern(new long[]{0L, 600L, 400L, 600L});
         callChannel.enableLights(true);
+        Uri ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+        if (ringUri != null) {
+            AudioAttributes ringAttr = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+            callChannel.setSound(ringUri, ringAttr);
+        }
         manager.createNotificationChannel(callChannel);
     }
 
@@ -352,52 +378,137 @@ public class MessageService extends Service {
         ensureNotificationChannels(this);
     }
 
+    public static void cancelIncomingCallNotification(Context ctx, String callId) {
+        if (ctx != null) {
+            try {
+                NotificationManager mgr = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
+                if (mgr != null) mgr.cancel(CALL_NOTIF_ID);
+            } catch (Exception ignored) {
+            }
+        }
+        IncomingCallActivity.dismissIfMatches(callId);
+    }
+
     public static void showIncomingCallNotification(Context ctx, String callerName, String mode, String chatId) {
+        showIncomingCallNotification(ctx, callerName, mode, chatId, "", "", "");
+    }
+
+    public static void showIncomingCallNotification(
+        Context ctx,
+        String callerName,
+        String mode,
+        String chatId,
+        String callId,
+        String avatarUrl,
+        String avatarColor
+    ) {
+        if (ctx == null) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ctx.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 return;
             }
         }
+        ensureNotificationChannels(ctx);
         NotificationManager manager = (NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE);
         if (manager == null) return;
 
-        Intent openIntent = new Intent(ctx, MainActivity.class);
-        openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        if (chatId != null && !chatId.isEmpty()) {
-            openIntent.putExtra(EXTRA_CHAT_ID, chatId);
-        }
+        String safeName = (callerName != null && !callerName.isEmpty()) ? callerName : "VibeRoom";
+        boolean isVideo = "video".equalsIgnoreCase(mode);
+        String safeMode = isVideo ? "video" : "audio";
 
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             piFlags |= PendingIntent.FLAG_IMMUTABLE;
         }
-        PendingIntent pi = PendingIntent.getActivity(
-            ctx,
-            CALL_NOTIF_ID,
-            openIntent,
-            piFlags
-        );
 
-        String label = "video".equalsIgnoreCase(mode) ? "Incoming video call" : "Incoming voice call";
+        // 1. Body tap -> opens MainActivity with incoming call prompt
+        Intent openIntent = new Intent(ctx, MainActivity.class);
+        openIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        if (chatId != null && !chatId.isEmpty()) openIntent.putExtra(EXTRA_CHAT_ID, chatId);
+        if (callId != null && !callId.isEmpty()) openIntent.putExtra(MainActivity.EXTRA_CALL_ID, callId);
+        openIntent.putExtra(MainActivity.EXTRA_CALL_MODE, safeMode);
+        openIntent.putExtra(MainActivity.EXTRA_CALL_ACTION, "open");
+        PendingIntent bodyPi = PendingIntent.getActivity(ctx, CALL_NOTIF_ID, openIntent, piFlags);
+
+        // 2. Full-screen intent for locked screen -> native IncomingCallActivity
+        Intent fullIntent = new Intent(ctx, IncomingCallActivity.class);
+        fullIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if (chatId != null && !chatId.isEmpty()) fullIntent.putExtra(EXTRA_CHAT_ID, chatId);
+        if (callId != null && !callId.isEmpty()) fullIntent.putExtra(MainActivity.EXTRA_CALL_ID, callId);
+        fullIntent.putExtra(MainActivity.EXTRA_CALL_MODE, safeMode);
+        fullIntent.putExtra(MainActivity.EXTRA_CALLER_NAME, safeName);
+        if (avatarUrl != null) fullIntent.putExtra(MainActivity.EXTRA_AVATAR_URL, avatarUrl);
+        if (avatarColor != null) fullIntent.putExtra(MainActivity.EXTRA_AVATAR_COLOR, avatarColor);
+        PendingIntent fullScreenPi = PendingIntent.getActivity(ctx, CALL_NOTIF_ID + 1, fullIntent, piFlags);
+
+        // 3. Answer action button -> opens MainActivity directly & immediately accepts (no trampoline block on Android 12+)
+        Intent answerIntent = new Intent(ctx, MainActivity.class);
+        answerIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        if (chatId != null && !chatId.isEmpty()) answerIntent.putExtra(EXTRA_CHAT_ID, chatId);
+        if (callId != null && !callId.isEmpty()) answerIntent.putExtra(MainActivity.EXTRA_CALL_ID, callId);
+        answerIntent.putExtra(MainActivity.EXTRA_CALL_MODE, safeMode);
+        answerIntent.putExtra(MainActivity.EXTRA_CALL_ACTION, "answer");
+        PendingIntent answerPi = PendingIntent.getActivity(ctx, CALL_NOTIF_ID + 2, answerIntent, piFlags);
+
+        // 4. Decline action button -> background broadcast receiver (no Activity needed)
+        Intent declineIntent = new Intent(ctx, CallActionReceiver.class);
+        declineIntent.setAction(CallActionReceiver.ACTION_DECLINE_CALL);
+        if (callId != null && !callId.isEmpty()) declineIntent.putExtra(MainActivity.EXTRA_CALL_ID, callId);
+        PendingIntent declinePi = PendingIntent.getBroadcast(ctx, CALL_NOTIF_ID + 3, declineIntent, piFlags);
+
+        Bitmap avatarBmp = fetchAvatarBitmap(ctx, avatarUrl);
+        if (avatarBmp == null) {
+            avatarBmp = createInitialsAvatar(safeName, avatarColor);
+        }
+
+        String label = isVideo ? "Incoming video call" : "Incoming voice call";
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
             ? new Notification.Builder(ctx, CHANNEL_CALLS)
             : new Notification.Builder(ctx);
 
         builder.setSmallIcon(R.drawable.ic_stat_telechat)
-            .setContentTitle(callerName)
-            .setContentText(label + " — Tap to answer")
+            .setLargeIcon(avatarBmp)
+            .setContentTitle(safeName)
+            .setContentText(label)
+            .setOngoing(true)
             .setAutoCancel(true)
             .setCategory(Notification.CATEGORY_CALL)
-            .setContentIntent(pi);
+            .setContentIntent(bodyPi)
+            .setFullScreenIntent(fullScreenPi, true);
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setTimeoutAfter(45_000L);
+        } else {
             builder.setPriority(Notification.PRIORITY_MAX);
+            Uri ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+            if (ringUri != null) {
+                builder.setSound(ringUri);
+            }
+            builder.setVibrate(new long[]{0L, 600L, 400L, 600L});
         }
 
-        manager.notify(CALL_NOTIF_ID, builder.build());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            builder.addAction(new Notification.Action.Builder(
+                Icon.createWithResource(ctx, android.R.drawable.ic_menu_close_clear_cancel),
+                "Decline",
+                declinePi
+            ).build());
+            builder.addAction(new Notification.Action.Builder(
+                Icon.createWithResource(ctx, android.R.drawable.ic_menu_call),
+                "Answer",
+                answerPi
+            ).build());
+        } else {
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Decline", declinePi);
+            builder.addAction(android.R.drawable.ic_menu_call, "Answer", answerPi);
+        }
+
+        Notification notif = builder.build();
+        notif.flags |= Notification.FLAG_INSISTENT;
+        manager.notify(CALL_NOTIF_ID, notif);
     }
 
-    private static Bitmap fetchAvatarBitmap(Context ctx, String avatarUrl) {
+    public static Bitmap fetchAvatarBitmap(Context ctx, String avatarUrl) {
         if (avatarUrl == null || avatarUrl.isEmpty() || "null".equals(avatarUrl)) return null;
         HttpURLConnection conn = null;
         try {
@@ -449,7 +560,7 @@ public class MessageService extends Service {
         return out;
     }
 
-    private static Bitmap createInitialsAvatar(String displayName, String avatarColor) {
+    public static Bitmap createInitialsAvatar(String displayName, String avatarColor) {
         int sizePx = 128;
         Bitmap out = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(out);

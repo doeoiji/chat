@@ -72,6 +72,7 @@
     userScrolledSinceOpen: false,
     pendingShare: null,
     queuedAndroidShare: null,
+    pendingCallAction: null,
     sending: false,
     blockedUsers: [],
     pendingProfileLinkUser: null,
@@ -1028,6 +1029,8 @@
       navigator.serviceWorker.addEventListener('message', (ev) => {
         if (ev.data && ev.data.type === 'open_chat') {
           openChatByIdOrSender(ev.data.chatId, ev.data.sender);
+        } else if (ev.data && ev.data.type === 'call_action') {
+          handleIncomingCallAction(ev.data);
         }
       });
       if (state.me && typeof Notification !== 'undefined' && Notification.permission === 'granted' && state.prefs.notifications) {
@@ -3910,7 +3913,7 @@
     const targets = state.chats.filter((c) => chatIds.includes(c.id));
     if (targets.length === 0) return;
 
-    const dmTargets = targets.filter((c) => !c.type || c.type === 'dm');
+    const dmTargets = targets.filter((c) => !c.type || c.type === 'dm' || c.type === 'secret' || String(c.id || '').startsWith('sec_'));
     const adminRoomTargets = targets.filter((c) => (c.type === 'group' || c.type === 'channel') && state.me && (c.createdBy === state.me.username || (Array.isArray(c.admins) && c.admins.includes(state.me.username))));
     const allowForEveryone = dmTargets.length > 0 || adminRoomTargets.length > 0;
 
@@ -3918,14 +3921,17 @@
     if (targets.length === 1 && dmTargets.length === 1) {
       const peer = dmTargets[0].peer;
       const peerName = peer ? (peer.displayName || `@${peer.username}`) : 'other user';
-      label = `Also delete chat for ${peerName}`;
+      const isSecTarget = dmTargets[0].type === 'secret' || String(dmTargets[0].id || '').startsWith('sec_');
+      label = isSecTarget ? `Also delete secret chat for ${peerName}` : `Also delete chat for ${peerName}`;
     } else if (dmTargets.length === 0 && adminRoomTargets.length > 0) {
       label = 'Delete room for all members';
     }
 
-    const singleTitle = targets[0].type === 'saved'
+    const isFirstSecret = targets[0].type === 'secret' || String(targets[0].id || '').startsWith('sec_');
+    const baseSingleTitle = targets[0].type === 'saved'
       ? 'Saved Messages'
       : (targets[0].title || (targets[0].peer ? (targets[0].peer.displayName || targets[0].peer.username) : 'this chat'));
+    const singleTitle = isFirstSecret ? `🔒 ${baseSingleTitle}` : baseSingleTitle;
 
     state.deleteConfirmState = {
       mode: 'chats',
@@ -3994,8 +4000,12 @@
         state.pinnedMessage = null;
         state.messages = [];
         els.activeChat.classList.add('hidden');
+        els.activeChat.classList.remove('is-secret-chat');
+        if (els.secretChatBar) els.secretChatBar.classList.add('hidden');
         els.chatEmptyState.classList.remove('hidden');
         els.appShell.classList.remove('mobile-chat-open');
+        syncAndroidState();
+        syncScreenCaptureProtection();
       }
       exitChatSelectMode();
       await refreshChats();
@@ -4751,8 +4761,12 @@
         state.pinnedMessage = null;
         state.messages = [];
         els.activeChat.classList.add('hidden');
+        els.activeChat.classList.remove('is-secret-chat');
+        if (els.secretChatBar) els.secretChatBar.classList.add('hidden');
         els.chatEmptyState.classList.remove('hidden');
         els.appShell.classList.remove('mobile-chat-open');
+        syncAndroidState();
+        syncScreenCaptureProtection();
         if (data.by && (!state.me || data.by !== state.me.username)) {
           showToast('This chat was deleted.', 'info');
         }
@@ -6822,6 +6836,15 @@
         return;
       }
 
+      const openCallMenuBtn = e.target.closest('[data-open-call-menu]');
+      if (openCallMenuBtn) {
+        e.stopPropagation();
+        if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.openCallMenuForMessage === 'function') {
+          await window.VibeRoomFeatures.openCallMenuForMessage(openCallMenuBtn.dataset.openCallMenu || '');
+        }
+        return;
+      }
+
       const callBackBtn = e.target.closest('[data-call-back]');
       if (callBackBtn && state.activePeer) {
         e.stopPropagation();
@@ -7850,6 +7873,11 @@
       state.pendingDeepLinkChatId = null;
       await openChatByIdOrSender(targetChatId, null);
     }
+    if (state.pendingCallAction) {
+      const queuedCall = state.pendingCallAction;
+      state.pendingCallAction = null;
+      await handleIncomingCallAction(queuedCall);
+    }
     if (state.pendingProfileLinkUser) {
       const targetHandle = state.pendingProfileLinkUser;
       state.pendingProfileLinkUser = null;
@@ -7925,9 +7953,28 @@
     });
   }
 
+  async function handleIncomingCallAction(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    if (!state.me) {
+      state.pendingCallAction = payload;
+      return;
+    }
+    if (window.VibeRoomFeatures && typeof window.VibeRoomFeatures.handleCallDeepLink === 'function') {
+      await window.VibeRoomFeatures.handleCallDeepLink(payload);
+    } else if (payload.chatId) {
+      await openChatByIdOrSender(payload.chatId, null);
+    }
+  }
+
   // Expose clean hooks for the Android WebView wrapper
-  window.__telechatSyncState = (isFg) => syncAndroidState(isFg);
+  window.__telechatSyncState = (isFg) => {
+    syncAndroidState(isFg);
+    if (isFg && state.me && window.VibeRoomFeatures && typeof window.VibeRoomFeatures.syncActiveIncomingCall === 'function') {
+      window.VibeRoomFeatures.syncActiveIncomingCall(false);
+    }
+  };
   window.__telechatOpenChat = (chatId) => openChatByIdOrSender(chatId, null);
+  window.__telechatHandleCallAction = (payload) => handleIncomingCallAction(payload);
   window.__telechatOnFcmToken = (token) => syncAndroidFcmToken(token);
   window.__telechatOnUpdateStatus = (info) => updateAppUpdateUI(info);
   window.__telechatReceiveShare = (payload) => handleIncomingAndroidShare(payload);
@@ -7992,6 +8039,7 @@
     api,
     openChatWithUser,
     openSecretChatWithUser,
+    openChatByIdOrSender,
     openRoomById,
     openSavedMessages,
     refreshChats,
@@ -8014,6 +8062,9 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) saveCurrentChatScroll();
     syncAndroidState(!document.hidden);
+    if (!document.hidden && state.me && window.VibeRoomFeatures && typeof window.VibeRoomFeatures.syncActiveIncomingCall === 'function') {
+      window.VibeRoomFeatures.syncActiveIncomingCall(false);
+    }
   });
   if (typeof window.addEventListener === 'function') {
     window.addEventListener('pagehide', saveCurrentChatScroll);
@@ -8031,20 +8082,33 @@
         const params = new URLSearchParams(window.location.search);
         const uParam = params.get('user');
         const cParam = params.get('chatId');
+        const callIdParam = params.get('callId');
+        const callActionParam = params.get('callAction');
         if (cParam) {
           state.pendingDeepLinkChatId = cParam.trim();
+        }
+        if (callIdParam || callActionParam) {
+          state.pendingCallAction = {
+            callId: callIdParam ? callIdParam.trim() : '',
+            action: callActionParam ? callActionParam.trim() : 'open',
+            chatId: cParam ? cParam.trim() : ''
+          };
         }
         if (uParam) {
           state.pendingProfileLinkUser = uParam.trim().replace(/^@+/, '').toLowerCase();
           if (window.history && typeof window.history.replaceState === 'function') {
             params.delete('user');
             params.delete('chatId');
+            params.delete('callId');
+            params.delete('callAction');
             const remaining = params.toString();
             const nextUrl = window.location.pathname + (remaining ? `?${remaining}` : '') + (window.location.hash || '');
             window.history.replaceState({}, '', nextUrl);
           }
-        } else if (cParam && window.history && typeof window.history.replaceState === 'function') {
+        } else if ((cParam || callIdParam || callActionParam) && window.history && typeof window.history.replaceState === 'function') {
           params.delete('chatId');
+          params.delete('callId');
+          params.delete('callAction');
           const remaining = params.toString();
           const nextUrl = window.location.pathname + (remaining ? `?${remaining}` : '') + (window.location.hash || '');
           window.history.replaceState({}, '', nextUrl);

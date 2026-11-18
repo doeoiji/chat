@@ -1304,63 +1304,105 @@
     </div>
   </div>
 
-  <!-- Incoming Call Ring Overlay -->
-  <div id="call-ring-overlay" class="call-ring-overlay hidden" role="dialog" aria-modal="true">
-    <div class="call-ring-card">
-      <div id="call-ring-avatar" class="avatar avatar-xl call-pulse"></div>
-      <h3 id="call-ring-name">Incoming Call</h3>
-      <div id="call-ring-sub" class="call-ring-sub">Voice Call</div>
+  <!-- Compact Swipeable Top Incoming Call Banner -->
+  <div id="call-ring-overlay" class="call-ring-overlay hidden" role="dialog" aria-modal="false" aria-label="Incoming call">
+    <div id="call-ring-card" class="call-ring-card">
+      <div id="call-ring-avatar" class="avatar call-pulse"></div>
+      <div class="call-ring-info">
+        <h3 id="call-ring-name">Incoming Call</h3>
+        <div id="call-ring-sub" class="call-ring-sub">Voice Call</div>
+      </div>
       <div class="call-ring-actions">
-        <div class="call-ring-btn-col">
-          <button id="call-decline-btn" class="call-circle-btn decline" type="button" title="Decline" aria-label="Decline">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.11 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91"/>
-              <line x1="1" y1="1" x2="23" y2="23"/>
-            </svg>
-          </button>
-          <span>Decline</span>
-        </div>
-        <div class="call-ring-btn-col">
-          <button id="call-accept-btn" class="call-circle-btn accept" type="button" title="Answer" aria-label="Answer">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>
-            </svg>
-          </button>
-          <span>Accept</span>
-        </div>
+        <button id="call-decline-btn" class="call-circle-btn decline" type="button" title="Decline" aria-label="Decline">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.11 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91"/>
+            <line x1="1" y1="1" x2="23" y2="23"/>
+          </svg>
+        </button>
+        <button id="call-accept-btn" class="call-circle-btn accept" type="button" title="Answer" aria-label="Answer">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>
+          </svg>
+        </button>
       </div>
     </div>
   </div>
 
   <!-- Active Call Stage Overlay -->
-  <div id="active-call-overlay" class="active-call-overlay hidden" role="dialog" aria-modal="true">
+  <div id="active-call-overlay" class="active-call-overlay is-audio-mode hidden" role="dialog" aria-modal="true">
     <div class="call-stage">
       <div class="call-topbar">
-        <div class="call-peer-head">
-          <div id="call-stage-name" class="call-stage-name">Calling...</div>
-          <div id="call-stage-status" class="call-stage-status">Connecting...</div>
-        </div>
-        <button id="call-minimize-btn" class="icon-btn call-top-icon" type="button" title="Minimize to keep chatting" aria-label="Minimize call">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <button id="call-minimize-btn" class="call-round-top-btn" type="button" title="Minimize to keep chatting" aria-label="Minimize call">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="4 14 10 14 10 20" />
             <polyline points="20 10 14 10 14 4" />
             <line x1="14" y1="10" x2="21" y2="3" />
             <line x1="3" y1="21" x2="10" y2="14" />
           </svg>
         </button>
+        <div class="call-peer-head">
+          <div id="call-stage-name" class="call-stage-name">Calling...</div>
+          <div id="call-stage-status" class="call-stage-status">Connecting...</div>
+        </div>
+        <div class="call-top-spacer" aria-hidden="true"></div>
       </div>
       <div class="call-videos">
         <video id="call-remote-video" class="call-remote-video hidden" autoplay playsinline disableRemotePlayback></video>
         <div id="call-audio-placeholder" class="call-audio-placeholder">
           <div id="call-stage-avatar" class="avatar avatar-xl"></div>
         </div>
-        <video id="call-local-video" class="call-local-video hidden" autoplay muted playsinline disableRemotePlayback></video>
+        <div id="call-pip-wrap" class="call-pip-wrap hidden">
+          <video id="call-local-video" class="call-local-video" autoplay muted playsinline disableRemotePlayback></video>
+          <button id="call-flip-btn" class="call-pip-action-btn" type="button" title="Switch Camera" aria-label="Switch Camera">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <path d="M9 14a3 3 0 0 1 5.12-2.12L15 13"/>
+              <polyline points="15 10 15 13 12 13"/>
+              <path d="M15 14a3 3 0 0 1-5.12 2.12L9 15"/>
+              <polyline points="9 18 9 15 12 15"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="call-controls">
-        <button id="call-mute-btn" class="call-ctrl-btn" type="button" title="Mute / Unmute">🎙️ Mute</button>
-        <button id="call-cam-btn" class="call-ctrl-btn hidden" type="button" title="Toggle Camera">📷 Cam</button>
-        <button id="call-flip-btn" class="call-ctrl-btn hidden" type="button" title="Switch Camera">🔄 Flip</button>
-        <button id="call-hangup-btn" class="call-ctrl-btn hangup" type="button" title="End Call">End Call</button>
+        <button id="call-speaker-btn" class="call-ctrl-tile" type="button" title="Speaker" aria-label="Toggle Speaker">
+          <span class="call-ctrl-circle">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+            </svg>
+          </span>
+          <span class="call-ctrl-label">Speaker</span>
+        </button>
+        <button id="call-cam-btn" class="call-ctrl-tile" type="button" title="Toggle Video" aria-label="Toggle Video">
+          <span class="call-ctrl-circle">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7"/>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+          </span>
+          <span class="call-ctrl-label">Video</span>
+        </button>
+        <button id="call-mute-btn" class="call-ctrl-tile" type="button" title="Mute / Unmute" aria-label="Mute or Unmute">
+          <span class="call-ctrl-circle">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          </span>
+          <span class="call-ctrl-label">Mute</span>
+        </button>
+        <button id="call-hangup-btn" class="call-ctrl-tile hangup" type="button" title="End Call" aria-label="End Call">
+          <span class="call-ctrl-circle">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.11 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91"/>
+            </svg>
+          </span>
+          <span class="call-ctrl-label">End</span>
+        </button>
       </div>
     </div>
   </div>

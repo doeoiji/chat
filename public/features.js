@@ -36,6 +36,9 @@
     callTimerId: null,
     callMuted: false,
     callCamOff: false,
+    callSpeakerOn: false,
+    callBannerDismissed: false,
+    pendingCallAction: null,
     callFacing: 'user',
     callMinimized: false,
     localStream: null,
@@ -988,11 +991,21 @@
     const me = getMyUsername();
     const isOutgoing = c.caller === me;
     const isVideo = c.mode === 'video';
+    const isRinging = c.status === 'ringing';
+    const isActive = c.status === 'active';
     const isMissedOrDeclined = c.status === 'missed' || c.status === 'declined' || c.status === 'cancelled';
 
     let headline = `${isOutgoing ? 'Outgoing' : 'Incoming'} ${isVideo ? 'Video' : 'Audio'} Call`;
     let sub = '';
-    if (c.status === 'completed') {
+    if (isRinging) {
+      headline = isOutgoing
+        ? `Outgoing ${isVideo ? 'Video' : 'Audio'} Call`
+        : `Incoming ${isVideo ? 'Video' : 'Audio'} Call`;
+      sub = isOutgoing ? 'Ringing... • Tap to view call' : 'Ringing • Tap to open call menu';
+    } else if (isActive) {
+      headline = `Ongoing ${isVideo ? 'Video' : 'Audio'} Call`;
+      sub = 'In progress • Tap to open call';
+    } else if (c.status === 'completed') {
       const m = Math.floor((c.durationSec || 0) / 60);
       const s = String((c.durationSec || 0) % 60).padStart(2, '0');
       sub = `Duration ${m}:${s}`;
@@ -1003,6 +1016,19 @@
       sub = 'Declined';
     } else {
       sub = 'Cancelled';
+    }
+
+    if (isRinging || isActive) {
+      return `
+        <div class="call-log-msg ${isRinging && !isOutgoing ? 'is-ringing' : 'is-active-call'}" data-open-call-menu="${esc(c.callId || '')}" role="button" tabindex="0">
+          <span class="call-log-icon">${isVideo ? '📹' : '📞'}</span>
+          <div class="call-log-meta">
+            <div class="call-log-title">${esc(headline)}</div>
+            <div class="call-log-sub">${esc(sub)}</div>
+          </div>
+          <span class="call-log-pill">${isRinging && !isOutgoing ? 'Answer' : 'Open'}</span>
+        </div>
+      `;
     }
 
     return `
@@ -1692,8 +1718,18 @@
     }, 500);
   }
 
+  function syncAndroidAudioRouting(inCall, speakerOn) {
+    try {
+      if (typeof window !== 'undefined' && window.AndroidBridge && typeof window.AndroidBridge.setCallAudioMode === 'function') {
+        window.AndroidBridge.setCallAudioMode(Boolean(inCall), Boolean(speakerOn));
+      }
+    } catch {
+    }
+  }
+
   function cleanupCallResources(hideAll = true) {
     stopRingtone();
+    syncAndroidAudioRouting(false, false);
     if (fState.callTimerId) {
       clearInterval(fState.callTimerId);
       fState.callTimerId = null;
@@ -1710,9 +1746,12 @@
     }
     fState.remoteStream = null;
     fState.pendingIce = [];
+    fState.lastSignalSeq = 0;
     fState.call = null;
     fState.callMuted = false;
     fState.callCamOff = false;
+    fState.callSpeakerOn = false;
+    fState.callBannerDismissed = false;
     fState.callMinimized = false;
 
     const lv = el('call-local-video');
@@ -1781,6 +1820,9 @@
       }
       if (ev.track && ev.track.kind === 'video' && fState.call) {
         fState.call.hasRemoteVideo = true;
+        if (fState.call.mode !== 'video') {
+          fState.call.mode = 'video';
+        }
       }
       if (rv && stream) rv.srcObject = stream;
       renderCallUI();
@@ -1818,12 +1860,16 @@
     const hasVideo = call.mode === 'video';
 
     if (call.status === 'ringing' && call.role === 'callee') {
-      if (ringOverlay) ringOverlay.classList.remove('hidden');
       if (stageOverlay) stageOverlay.classList.add('hidden');
       if (miniPlayer) miniPlayer.classList.add('hidden');
+      if (ringOverlay) {
+        ringOverlay.classList.toggle('hidden', Boolean(fState.callBannerDismissed));
+      }
       if (el('call-ring-avatar')) core().renderAvatar(el('call-ring-avatar'), peer);
       if (el('call-ring-name')) el('call-ring-name').textContent = peerName;
-      if (el('call-ring-sub')) el('call-ring-sub').textContent = `Incoming ${hasVideo ? 'video' : 'audio'} call...`;
+      if (el('call-ring-sub')) {
+        el('call-ring-sub').textContent = `Incoming ${hasVideo ? 'video' : 'audio'} call • Swipe away to hide`;
+      }
       return;
     }
 
@@ -1836,28 +1882,29 @@
       if (el('call-mini-mute')) el('call-mini-mute').textContent = fState.callMuted ? '🔇' : '🎙️';
     } else {
       if (miniPlayer) miniPlayer.classList.add('hidden');
-      if (stageOverlay) stageOverlay.classList.remove('hidden');
+      if (stageOverlay) {
+        stageOverlay.classList.remove('hidden');
+        stageOverlay.classList.toggle('is-video-mode', hasVideo);
+        stageOverlay.classList.toggle('is-audio-mode', !hasVideo);
+      }
       if (el('call-stage-name')) el('call-stage-name').textContent = peerName;
       if (el('call-stage-status')) {
-        el('call-stage-status').textContent = call.status === 'active'
-          ? formatCallDuration(Date.now() - (call.startedAt || Date.now()))
-          : 'Ringing...';
+        if (call.status === 'active') {
+          el('call-stage-status').textContent = formatCallDuration(Date.now() - (call.startedAt || Date.now()));
+        } else {
+          el('call-stage-status').textContent = hasVideo ? 'Ringing...' : '🔒 End-to-end encrypted';
+        }
       }
       const showRemoteVideo = hasVideo && Boolean(call.hasRemoteVideo) && call.status === 'active';
       if (el('call-remote-video')) el('call-remote-video').classList.toggle('hidden', !showRemoteVideo);
       if (el('call-stage-avatar')) core().renderAvatar(el('call-stage-avatar'), peer);
       if (el('call-audio-placeholder')) el('call-audio-placeholder').classList.toggle('hidden', showRemoteVideo);
-      if (el('call-local-video')) el('call-local-video').classList.toggle('hidden', !hasVideo || fState.callCamOff);
-      if (el('call-cam-btn')) el('call-cam-btn').classList.toggle('hidden', !hasVideo);
-      if (el('call-flip-btn')) el('call-flip-btn').classList.toggle('hidden', !hasVideo);
-      if (el('call-mute-btn')) {
-        el('call-mute-btn').textContent = fState.callMuted ? '🔇 Unmute' : '🎙️ Mute';
-        el('call-mute-btn').classList.toggle('active', fState.callMuted);
-      }
-      if (el('call-cam-btn')) {
-        el('call-cam-btn').textContent = fState.callCamOff ? '📷 Cam On' : '📷 Cam Off';
-        el('call-cam-btn').classList.toggle('active', fState.callCamOff);
-      }
+      const showLocalPip = hasVideo && !fState.callCamOff && Boolean(fState.localStream && fState.localStream.getVideoTracks().length > 0);
+      if (el('call-pip-wrap')) el('call-pip-wrap').classList.toggle('hidden', !showLocalPip);
+      if (el('call-local-video')) el('call-local-video').classList.toggle('hidden', !showLocalPip);
+      if (el('call-speaker-btn')) el('call-speaker-btn').classList.toggle('is-active', Boolean(fState.callSpeakerOn));
+      if (el('call-cam-btn')) el('call-cam-btn').classList.toggle('is-active', hasVideo && !fState.callCamOff);
+      if (el('call-mute-btn')) el('call-mute-btn').classList.toggle('is-active', Boolean(fState.callMuted));
     }
   }
 
@@ -1874,13 +1921,14 @@
     }
 
     const peer = state.activePeer;
+    const cleanMode = mode === 'video' ? 'video' : 'audio';
     try {
-      fState.localStream = await acquireMediaStream(mode);
+      fState.localStream = await acquireMediaStream(cleanMode);
       const data = await core().api('/api/calls/start', {
         method: 'POST',
         body: {
           targetUsername: peer.username,
-          mode,
+          mode: cleanMode,
           chatId: state.activeChatId
         }
       });
@@ -1894,6 +1942,8 @@
         status: 'ringing',
         startedAt: null
       };
+      fState.callSpeakerOn = data.call.mode === 'video';
+      syncAndroidAudioRouting(true, fState.callSpeakerOn);
 
       const lv = el('call-local-video');
       if (lv) lv.srcObject = fState.localStream;
@@ -1910,17 +1960,24 @@
     if (!fState.call || fState.call.role !== 'callee') return;
     const callId = fState.call.id;
     stopRingtone();
+    fState.callBannerDismissed = false;
+    fState.callMinimized = false;
     try {
       fState.localStream = await acquireMediaStream(fState.call.mode);
       const lv = el('call-local-video');
       if (lv) lv.srcObject = fState.localStream;
+      fState.callSpeakerOn = fState.call.mode === 'video';
+      syncAndroidAudioRouting(true, fState.callSpeakerOn);
 
       await createPeerConnectionForCall(callId);
       await core().api(`/api/calls/${encodeURIComponent(callId)}/accept`, { method: 'POST' });
       fState.call.status = 'active';
       fState.call.startedAt = Date.now();
+      fState.lastSignalSeq = 0;
       startCallTimer();
       renderCallUI();
+      setTimeout(() => pullBufferedSignals(callId), 400);
+      setTimeout(() => pullBufferedSignals(callId), 1400);
     } catch (err) {
       await core().api(`/api/calls/${encodeURIComponent(callId)}/decline`, { method: 'POST' }).catch(() => { });
       cleanupCallResources();
@@ -1948,6 +2005,13 @@
     }).catch(() => { });
   }
 
+  function toggleSpeakerCall() {
+    if (!fState.call) return;
+    fState.callSpeakerOn = !fState.callSpeakerOn;
+    syncAndroidAudioRouting(true, fState.callSpeakerOn);
+    renderCallUI();
+  }
+
   function toggleMuteCall() {
     if (!fState.localStream) return;
     fState.callMuted = !fState.callMuted;
@@ -1955,8 +2019,40 @@
     renderCallUI();
   }
 
-  function toggleVideoCall() {
-    if (!fState.localStream) return;
+  async function toggleVideoCall() {
+    if (!fState.call || !fState.localStream) return;
+    if (fState.call.mode !== 'video') {
+      try {
+        const camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: fState.callFacing },
+          audio: false
+        });
+        const track = camStream.getVideoTracks()[0];
+        if (!track) return;
+        fState.localStream.addTrack(track);
+        const lv = el('call-local-video');
+        if (lv) lv.srcObject = fState.localStream;
+        fState.call.mode = 'video';
+        fState.callCamOff = false;
+        fState.callSpeakerOn = true;
+        syncAndroidAudioRouting(true, true);
+        if (fState.pc) {
+          fState.pc.addTrack(track, fState.localStream);
+          if (fState.call.status === 'active') {
+            const offer = await fState.pc.createOffer();
+            await fState.pc.setLocalDescription(offer);
+            await core().api(`/api/calls/${encodeURIComponent(fState.call.id)}/signal`, {
+              method: 'POST',
+              body: { type: 'offer', data: offer }
+            });
+          }
+        }
+        renderCallUI();
+      } catch {
+        core().showToast('Could not enable camera.', 'error');
+      }
+      return;
+    }
     fState.callCamOff = !fState.callCamOff;
     fState.localStream.getVideoTracks().forEach((t) => { t.enabled = !fState.callCamOff; });
     renderCallUI();
@@ -1990,6 +2086,10 @@
 
   async function handleCallSignalEvent(payload) {
     if (!fState.call || !fState.pc || payload.callId !== fState.call.id) return;
+    if (typeof payload.seq === 'number') {
+      if (payload.seq <= (fState.lastSignalSeq || 0)) return;
+      fState.lastSignalSeq = payload.seq;
+    }
     const pc = fState.pc;
     try {
       if (payload.type === 'offer') {
@@ -2019,6 +2119,19 @@
       }
     } catch {
       // Ignore transient WebRTC negotiation mismatch
+    }
+  }
+
+  async function pullBufferedSignals(callId) {
+    if (!core() || !fState.call || !fState.pc || fState.call.id !== callId) return;
+    try {
+      const since = fState.lastSignalSeq || 0;
+      const data = await core().api(`/api/calls/${encodeURIComponent(callId)}/signals?since=${since}`);
+      if (!Array.isArray(data.signals)) return;
+      for (const sig of data.signals) {
+        await handleCallSignalEvent(sig);
+      }
+    } catch {
     }
   }
 
@@ -2067,10 +2180,11 @@
         : `${data.partnerAlias} disconnected.`;
       renderStrangerModal();
     } else if (eventName === 'call_incoming' && data.call) {
-      if (fState.call) {
+      if (fState.call && fState.call.id !== data.call.id) {
         core().api(`/api/calls/${encodeURIComponent(data.call.id)}/decline`, { method: 'POST' }).catch(() => { });
         return;
       }
+      fState.callBannerDismissed = false;
       fState.call = {
         id: data.call.id,
         role: 'callee',
@@ -2078,10 +2192,17 @@
         peerProfile: data.callerProfile,
         mode: data.call.mode,
         status: 'ringing',
-        startedAt: null
+        startedAt: null,
+        chatId: data.call.chatId || ''
       };
       startRingtone();
       renderCallUI();
+      if (fState.pendingCallAction && (!fState.pendingCallAction.callId || fState.pendingCallAction.callId === data.call.id)) {
+        const act = fState.pendingCallAction.action;
+        fState.pendingCallAction = null;
+        if (act === 'answer') await acceptIncomingCall();
+        else if (act === 'decline') await declineIncomingCall();
+      }
     } else if (eventName === 'call_accepted' && fState.call && fState.call.id === data.callId) {
       fState.call.status = 'active';
       fState.call.startedAt = Date.now();
@@ -2126,6 +2247,179 @@
     }
   }
 
+  async function syncActiveIncomingCall(forceShowBanner = false) {
+    if (!core() || !core().getState().me) return null;
+    try {
+      const data = await core().api('/api/calls/active');
+      const active = data && data.activeCall;
+      if (!active || !active.call) {
+        if (fState.call && fState.call.status === 'ringing') {
+          cleanupCallResources();
+        }
+        if (fState.pendingCallAction) {
+          const wasAnswer = fState.pendingCallAction.action === 'answer';
+          fState.pendingCallAction = null;
+          if (wasAnswer) {
+            core().showToast('This call has already ended.', 'info');
+          }
+        }
+        return null;
+      }
+      const c = active.call;
+      const me = getMyUsername();
+      const role = c.caller === me ? 'caller' : 'callee';
+      const peerProfile = role === 'caller' ? active.calleeProfile : active.callerProfile;
+      const peerUsername = role === 'caller' ? c.callee : c.caller;
+
+      if (!fState.call || fState.call.id !== c.id) {
+        fState.callBannerDismissed = false;
+        fState.call = {
+          id: c.id,
+          role,
+          peerUsername,
+          peerProfile,
+          mode: c.mode,
+          status: c.status,
+          startedAt: c.startedAt || null,
+          chatId: c.chatId || ''
+        };
+      } else if (forceShowBanner) {
+        fState.callBannerDismissed = false;
+      }
+
+      if (fState.call.role === 'callee' && fState.call.status === 'ringing') {
+        const act = fState.pendingCallAction;
+        if (act && (!act.callId || act.callId === fState.call.id)) {
+          fState.pendingCallAction = null;
+          if (act.action === 'answer') {
+            await acceptIncomingCall();
+            return fState.call;
+          }
+          if (act.action === 'decline') {
+            await declineIncomingCall();
+            return null;
+          }
+        }
+        renderCallUI();
+        if (!fState.callBannerDismissed && !fState.ringOscTimer) {
+          startRingtone();
+        }
+      } else {
+        fState.pendingCallAction = null;
+        renderCallUI();
+      }
+      return fState.call;
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleCallDeepLink(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    const action = String(payload.action || 'open');
+    const chatId = payload.chatId ? String(payload.chatId) : '';
+    const callId = payload.callId ? String(payload.callId) : '';
+    const mode = payload.mode ? String(payload.mode) : 'audio';
+
+    fState.pendingCallAction = { callId, chatId, action, mode };
+    if (chatId && core() && core().getState().me && typeof core().openChatByIdOrSender === 'function') {
+      if (core().getState().activeChatId !== chatId) {
+        await core().openChatByIdOrSender(chatId, null);
+      }
+    }
+    if (core() && core().getState().me) {
+      await syncActiveIncomingCall(true);
+    }
+  }
+
+  async function openCallMenuForMessage(callId) {
+    if (fState.call && (!callId || fState.call.id === callId)) {
+      if (fState.call.status === 'ringing' && fState.call.role === 'callee') {
+        fState.callBannerDismissed = false;
+        renderCallUI();
+        if (!fState.ringOscTimer) startRingtone();
+      } else {
+        fState.callMinimized = false;
+        renderCallUI();
+      }
+      return;
+    }
+    const found = await syncActiveIncomingCall(true);
+    if (!found && core()) {
+      core().showToast('This call has already ended.', 'info');
+    }
+  }
+
+  function bindCallBannerSwipe() {
+    const card = el('call-ring-card');
+    if (!card || typeof card.addEventListener !== 'function') return;
+    let drag = null;
+    const resetStyles = () => {
+      card.style.transition = '';
+      card.style.transform = '';
+      card.style.opacity = '';
+    };
+    const startDrag = (x, y, target) => {
+      if (target && typeof target.closest === 'function' && target.closest('button')) return;
+      drag = { x, y, dx: 0, dy: 0 };
+      card.style.transition = 'none';
+    };
+    const moveDrag = (x, y) => {
+      if (!drag) return;
+      drag.dx = x - drag.x;
+      drag.dy = Math.min(20, y - drag.y);
+      const dist = Math.max(Math.abs(drag.dx), Math.max(0, -drag.dy) * 1.4);
+      const alpha = Math.max(0.2, 1 - dist / 180);
+      card.style.transform = `translate(${drag.dx}px, ${drag.dy}px)`;
+      card.style.opacity = String(alpha);
+    };
+    const endDrag = () => {
+      if (!drag) return;
+      const { dx, dy } = drag;
+      drag = null;
+      if (Math.abs(dx) > 72 || dy < -38) {
+        card.style.transition = 'transform 180ms ease, opacity 180ms ease';
+        const tx = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 340 : -340) : 0;
+        const ty = dy < -38 ? -120 : 0;
+        card.style.transform = `translate(${tx}px, ${ty}px)`;
+        card.style.opacity = '0';
+        setTimeout(() => {
+          fState.callBannerDismissed = true;
+          stopRingtone();
+          renderCallUI();
+          resetStyles();
+          if (core() && fState.call && fState.call.status === 'ringing') {
+            core().showToast('Incoming call hidden — tap it in chat to answer', 'info');
+          }
+        }, 170);
+      } else {
+        card.style.transition = 'transform 160ms ease, opacity 160ms ease';
+        card.style.transform = '';
+        card.style.opacity = '';
+      }
+    };
+
+    card.addEventListener('touchstart', (e) => {
+      if (e.touches && e.touches[0]) startDrag(e.touches[0].clientX, e.touches[0].clientY, e.target);
+    }, { passive: true });
+    card.addEventListener('touchmove', (e) => {
+      if (drag && e.touches && e.touches[0]) moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    card.addEventListener('touchend', endDrag);
+    card.addEventListener('touchcancel', endDrag);
+    card.addEventListener('mousedown', (e) => {
+      if (e.button === 0) startDrag(e.clientX, e.clientY, e.target);
+    });
+    if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('mousemove', (e) => {
+        if (drag) moveDrag(e.clientX, e.clientY);
+      });
+      window.addEventListener('mouseup', () => {
+        if (drag) endDrag();
+      });
+    }
+  }
+
   async function onAuthenticated() {
     if (typeof window !== 'undefined' && window.location && typeof URLSearchParams === 'function') {
       const qs = new URLSearchParams(window.location.search || '');
@@ -2137,6 +2431,7 @@
         await handleInviteJoin(joinCode);
       }
     }
+    await syncActiveIncomingCall(false);
   }
 
   function onLogout() {
@@ -2559,10 +2854,12 @@
     if (el('call-decline-btn')) el('call-decline-btn').addEventListener('click', declineIncomingCall);
     if (el('call-hangup-btn')) el('call-hangup-btn').addEventListener('click', () => hangupCurrentCall('hangup'));
     if (el('call-mini-hangup')) el('call-mini-hangup').addEventListener('click', () => hangupCurrentCall('hangup'));
+    if (el('call-speaker-btn')) el('call-speaker-btn').addEventListener('click', toggleSpeakerCall);
     if (el('call-mute-btn')) el('call-mute-btn').addEventListener('click', toggleMuteCall);
     if (el('call-mini-mute')) el('call-mini-mute').addEventListener('click', toggleMuteCall);
     if (el('call-cam-btn')) el('call-cam-btn').addEventListener('click', toggleVideoCall);
     if (el('call-flip-btn')) el('call-flip-btn').addEventListener('click', flipCameraCall);
+    bindCallBannerSwipe();
     if (el('call-minimize-btn')) {
       el('call-minimize-btn').addEventListener('click', () => {
         fState.callMinimized = true;
@@ -2626,7 +2923,10 @@
     openStrangerModal,
     openGroupModal,
     openGamesHub,
-    initiateCall
+    initiateCall,
+    syncActiveIncomingCall,
+    handleCallDeepLink,
+    openCallMenuForMessage
   };
 
   if (typeof document !== 'undefined') {

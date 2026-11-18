@@ -747,6 +747,13 @@ test('frontend app.js and features.js boot cleanly and match HTML element IDs', 
   assert.equal(sandbox.document.body.classList.contains('privacy-screen-protected'), false);
   assert.equal(typeof sandbox.window.VibeRoomCore, 'object');
   assert.equal(typeof sandbox.window.VibeRoomFeatures, 'object');
+  assert.equal(typeof sandbox.window.__telechatHandleCallAction, 'function');
+  assert.equal(typeof sandbox.window.VibeRoomFeatures.syncActiveIncomingCall, 'function');
+  const ringCardHtml = sandbox.window.VibeRoomFeatures.renderCallBubbleHtml({
+    call: { callId: 'c1', caller: 'bob', callee: 'alice', mode: 'video', status: 'ringing' }
+  });
+  assert.match(ringCardHtml, /Incoming Video Call/);
+  assert.match(ringCardHtml, /data-open-call-menu="c1"/);
 });
 
 test('oversized avatar upload returns clean HTTP 413 without destroying socket', async (t) => {
@@ -1156,6 +1163,26 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
   assert.equal(callStart.status, 201);
   const callId = callStart.body.call.id;
 
+  // Cold-start recovery: Bob can query /api/calls/active when reopening from closed state
+  const activeForBob = await invokeRouter(handleRequest, '/api/calls/active', {
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(activeForBob.status, 200);
+  assert.ok(activeForBob.body.activeCall);
+  assert.equal(activeForBob.body.activeCall.call.id, callId);
+  assert.equal(activeForBob.body.activeCall.call.status, 'ringing');
+  assert.equal(activeForBob.body.activeCall.callerProfile.username, 'alice_p');
+
+  // Incoming Call box should already appear in DM while ringing
+  const chatWhileRinging = await invokeRouter(handleRequest, '/api/chats/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
+    body: JSON.stringify({ targetUsername: 'alice_p' })
+  });
+  const ringMsg = chatWhileRinging.body.messages.find((m) => m.kind === 'call' && m.call && m.call.callId === callId);
+  assert.ok(ringMsg, 'Expected ringing incoming call box in chat immediately');
+  assert.equal(ringMsg.call.status, 'ringing');
+
   const callAccept = await invokeRouter(handleRequest, `/api/calls/${callId}/accept`, {
     method: 'POST',
     headers: { Cookie: bob.cookie }
@@ -1169,6 +1196,14 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
   });
   assert.equal(sigRes.status, 200);
 
+  // Buffered signals can be pulled on cold resume
+  const sigPull = await invokeRouter(handleRequest, `/api/calls/${callId}/signals?since=0`, {
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(sigPull.status, 200);
+  assert.equal(sigPull.body.signals.length, 1);
+  assert.equal(sigPull.body.signals[0].type, 'offer');
+
   const endRes = await invokeRouter(handleRequest, `/api/calls/${callId}/end`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: bob.cookie },
@@ -1176,14 +1211,23 @@ test('chat mini-games (TicTacToe, Connect4, Chess, WordDuel) and WebRTC call sig
   });
   assert.equal(endRes.status, 200);
 
-  // Verify call history message was saved in chat & chat list preview
+  // Active call clears once ended
+  const activeAfterEnd = await invokeRouter(handleRequest, '/api/calls/active', {
+    headers: { Cookie: bob.cookie }
+  });
+  assert.equal(activeAfterEnd.status, 200);
+  assert.equal(activeAfterEnd.body.activeCall, null);
+
+  // Verify the single call card updated in-place to completed (no duplicate card)
   const chatMessagesAfterCall = await invokeRouter(handleRequest, '/api/chats/open', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
     body: JSON.stringify({ targetUsername: 'bob_p' })
   });
   assert.equal(chatMessagesAfterCall.status, 200);
-  const callLogMsg = chatMessagesAfterCall.body.messages.find((m) => m.kind === 'call' && m.call && m.call.callId === callId);
+  const matchingCallMsgs = chatMessagesAfterCall.body.messages.filter((m) => m.kind === 'call' && m.call && m.call.callId === callId);
+  assert.equal(matchingCallMsgs.length, 1);
+  const callLogMsg = matchingCallMsgs[0];
   assert.ok(callLogMsg, 'Expected completed call log message in DM history');
   assert.equal(callLogMsg.call.status, 'completed');
   assert.equal(callLogMsg.call.mode, 'video');
@@ -2582,6 +2626,20 @@ test('polls, quizzes, game leaderboards, streaks, disappearing messages, view-on
   await new Promise((r) => setTimeout(r, 1100));
   const secExpiredRes = await invokeRouter(handleRequest, `/api/chats/${secChatId}/messages`, { headers: { Cookie: alice.cookie } });
   assert.equal(secExpiredRes.body.messages.some((m) => m.id === secMsgId), false);
+
+  // Deleting Secret Chat for both parties removes it from both Alice and Bob
+  const secDelRes = await invokeRouter(handleRequest, '/api/chats/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Cookie: alice.cookie },
+    body: JSON.stringify({ chatIds: [secChatId], forEveryone: true })
+  });
+  assert.equal(secDelRes.status, 200);
+  assert.deepEqual(secDelRes.body.deletedChatIds, [secChatId]);
+  assert.equal(secDelRes.body.forEveryone, true);
+  const aliceAfterDel = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: alice.cookie } })).body.chats;
+  const bobAfterDel = (await invokeRouter(handleRequest, '/api/chats', { headers: { Cookie: bob.cookie } })).body.chats;
+  assert.equal(aliceAfterDel.some((c) => c.id === secChatId), false);
+  assert.equal(bobAfterDel.some((c) => c.id === secChatId), false);
 });
 
 

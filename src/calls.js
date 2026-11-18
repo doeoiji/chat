@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 
-function createCallsService({ hub, storage, audit = null }) {
-  // callId -> { id, caller, callee, mode: 'audio'|'video', chatId, status: 'ringing'|'active'|'ended', createdAt, timeoutId }
+function createCallsService({ hub, storage, audit = null, pushService = null }) {
+  // callId -> { id, caller, callee, mode: 'audio'|'video', chatId, status: 'ringing'|'active'|'ended', createdAt, timeoutId, messageId }
   const calls = new Map();
   // username -> callId
   const activeCallByUser = new Map();
@@ -35,9 +35,33 @@ function createCallsService({ hub, storage, audit = null }) {
       callee: call.callee,
       mode: call.mode,
       chatId: call.chatId,
+      messageId: call.messageId || null,
       status: call.status,
+      startedAt: call.startedAt || null,
       createdAt: call.createdAt
     };
+  }
+
+  function notifyCallDismissedPush(targetUsername, callId, chatId = '') {
+    if (!pushService || !targetUsername || !callId) return;
+    pushService.notifyUser(targetUsername, {
+      type: 'call_ended',
+      silentPush: true,
+      title: 'VibeRoom',
+      body: '',
+      data: {
+        type: 'call_ended',
+        callId,
+        chatId: chatId || ''
+      }
+    }, { ignoreMute: true }).catch(() => {});
+  }
+
+  async function ensureCallChatFolder(dmChatId, userA, userB) {
+    if (String(dmChatId || '').startsWith('sec_') && typeof storage.ensureSecretChatFolder === 'function') {
+      return storage.ensureSecretChatFolder(userA, userB, userA);
+    }
+    return storage.ensureChatFolder(userA, userB);
   }
 
   async function startCall({ callerUsername, targetUsername, mode = 'audio', chatId = null }) {
@@ -71,7 +95,7 @@ function createCallsService({ hub, storage, audit = null }) {
     const callId = `call_${crypto.randomBytes(6).toString('hex')}`;
     const cleanMode = mode === 'video' ? 'video' : 'audio';
     const dmChatId = chatId || storage.getDmChatId(callerUsername, callee);
-    await storage.ensureChatFolder(callerUsername, callee);
+    await ensureCallChatFolder(dmChatId, callerUsername, callee);
 
     const call = {
       id: callId,
@@ -79,12 +103,47 @@ function createCallsService({ hub, storage, audit = null }) {
       callee,
       mode: cleanMode,
       chatId: dmChatId,
+      messageId: null,
       status: 'ringing',
       startedAt: null,
       historyLogged: false,
+      signalSeq: 0,
+      signalsByRecipient: {
+        [callerUsername]: [],
+        [callee]: []
+      },
       createdAt: new Date().toISOString(),
       timeoutId: null
     };
+
+    try {
+      const initText = cleanMode === 'video' ? 'Incoming video call' : 'Incoming audio call';
+      const { message, meta } = await storage.appendChatMessage(dmChatId, callerUsername, {
+        text: initText,
+        kind: 'call',
+        call: {
+          callId,
+          mode: cleanMode,
+          status: 'ringing',
+          durationSec: 0,
+          caller: callerUsername,
+          callee
+        }
+      });
+      if (message) {
+        call.messageId = message.id;
+        for (const p of [callerUsername, callee]) {
+          hub.emitToUser(p, 'new_message', {
+            chatId: dmChatId,
+            message: storage.sanitizeMessageForViewer ? storage.sanitizeMessageForViewer(message, p) : message,
+            meta,
+            senderProfile: callerPublic
+          });
+        }
+      }
+    } catch {
+      // Non-fatal if initial call card fails
+    }
 
     async function recordCallHistory(targetCall, outcome) {
       if (!targetCall || targetCall.historyLogged || !targetCall.chatId) return;
@@ -106,26 +165,44 @@ function createCallsService({ hub, storage, audit = null }) {
         text = `Cancelled ${modeLabel.toLowerCase()}`;
       }
       try {
-        await storage.ensureChatFolder(targetCall.caller, targetCall.callee);
-        const { message, meta } = await storage.appendChatMessage(targetCall.chatId, targetCall.caller, {
-          text,
-          kind: 'call',
-          call: {
-            callId: targetCall.id,
-            mode: targetCall.mode,
+        await ensureCallChatFolder(targetCall.chatId, targetCall.caller, targetCall.callee);
+        let updatedOut = null;
+        if (targetCall.messageId && typeof storage.updateChatCallMessage === 'function') {
+          updatedOut = await storage.updateChatCallMessage(targetCall.chatId, targetCall.messageId, {
+            text,
             status: outcome,
             durationSec,
-            caller: targetCall.caller,
-            callee: targetCall.callee
+            markUnreadForUsername: outcome === 'missed' ? targetCall.callee : null
+          });
+        }
+        if (updatedOut && updatedOut.message) {
+          for (const p of [targetCall.caller, targetCall.callee]) {
+            hub.emitToUser(p, 'message_updated', {
+              chatId: targetCall.chatId,
+              message: storage.sanitizeMessageForViewer ? storage.sanitizeMessageForViewer(updatedOut.message, p) : updatedOut.message
+            });
           }
-        });
-        const callerRaw = await storage.getUserByUsername(targetCall.caller);
-        hub.emitToUsers([targetCall.caller, targetCall.callee], 'new_message', {
-          chatId: targetCall.chatId,
-          message,
-          meta,
-          senderProfile: callerRaw ? storage.toPublicUser(callerRaw) : null
-        });
+        } else {
+          const { message, meta } = await storage.appendChatMessage(targetCall.chatId, targetCall.caller, {
+            text,
+            kind: 'call',
+            call: {
+              callId: targetCall.id,
+              mode: targetCall.mode,
+              status: outcome,
+              durationSec,
+              caller: targetCall.caller,
+              callee: targetCall.callee
+            }
+          });
+          const callerRaw = await storage.getUserByUsername(targetCall.caller);
+          hub.emitToUsers([targetCall.caller, targetCall.callee], 'new_message', {
+            chatId: targetCall.chatId,
+            message,
+            meta,
+            senderProfile: callerRaw ? storage.toPublicUser(callerRaw) : null
+          });
+        }
         if (audit) {
           audit.log({
             action: `CALL_${String(outcome || 'ended').toUpperCase()}`,
@@ -143,6 +220,7 @@ function createCallsService({ hub, storage, audit = null }) {
       } catch {
         // Ignore history write failure on cleanup
       }
+      notifyCallDismissedPush(targetCall.callee, targetCall.id, targetCall.chatId);
     }
 
     call._recordHistory = recordCallHistory;
@@ -205,6 +283,24 @@ function createCallsService({ hub, storage, audit = null }) {
       callId,
       by: actorUsername
     });
+    if (call.messageId && typeof storage.updateChatCallMessage === 'function') {
+      const label = call.mode === 'video' ? 'Ongoing video call' : 'Ongoing audio call';
+      storage.updateChatCallMessage(call.chatId, call.messageId, {
+        text: label,
+        status: 'active',
+        durationSec: 0
+      }).then((updatedOut) => {
+        if (updatedOut && updatedOut.message) {
+          for (const p of [call.caller, call.callee]) {
+            hub.emitToUser(p, 'message_updated', {
+              chatId: call.chatId,
+              message: storage.sanitizeMessageForViewer ? storage.sanitizeMessageForViewer(updatedOut.message, p) : updatedOut.message
+            });
+          }
+        }
+      }).catch(() => {});
+    }
+    notifyCallDismissedPush(actorUsername, callId, call.chatId);
     return { call: sanitizeCall(call), iceServers: getIceServers() };
   }
 
@@ -215,13 +311,29 @@ function createCallsService({ hub, storage, audit = null }) {
       err.statusCode = 400;
       throw err;
     }
-    hub.emitToUser(peer, 'call_signal', {
+    call.signalSeq = (call.signalSeq || 0) + 1;
+    const payload = {
+      seq: call.signalSeq,
       callId: call.id,
       from: actorUsername,
       type,
       data
-    });
-    return { ok: true };
+    };
+    if (call.signalsByRecipient && Array.isArray(call.signalsByRecipient[peer])) {
+      call.signalsByRecipient[peer].push(payload);
+      if (call.signalsByRecipient[peer].length > 150) {
+        call.signalsByRecipient[peer].shift();
+      }
+    }
+    hub.emitToUser(peer, 'call_signal', payload);
+    return { ok: true, seq: payload.seq };
+  }
+
+  function getBufferedSignals(callId, actorUsername, sinceSeq = 0) {
+    const { call } = getCallAndPeer(callId, actorUsername);
+    const list = (call.signalsByRecipient && call.signalsByRecipient[actorUsername]) || [];
+    const minSeq = Number(sinceSeq) || 0;
+    return list.filter((item) => item.seq > minSeq);
   }
 
   async function declineCall(callId, actorUsername) {
@@ -260,13 +372,30 @@ function createCallsService({ hub, storage, audit = null }) {
     return { ok: true };
   }
 
+  async function getActiveCallForUser(username) {
+    const cid = activeCallByUser.get(username);
+    if (!cid) return null;
+    const call = calls.get(cid);
+    if (!call || call.status === 'ended') return null;
+    const callerRaw = await storage.getUserByUsername(call.caller).catch(() => null);
+    const calleeRaw = await storage.getUserByUsername(call.callee).catch(() => null);
+    return {
+      call: sanitizeCall(call),
+      callerProfile: callerRaw ? storage.toPublicUser(callerRaw) : { username: call.caller, displayName: call.caller },
+      calleeProfile: calleeRaw ? storage.toPublicUser(calleeRaw) : { username: call.callee, displayName: call.callee },
+      iceServers: getIceServers()
+    };
+  }
+
   return {
     getIceServers,
     startCall,
     acceptCall,
     relaySignal,
+    getBufferedSignals,
     declineCall,
     endCall,
+    getActiveCallForUser,
     onUserDisconnect(username) {
       const cid = activeCallByUser.get(username);
       if (cid && !hub.isOnline(username)) {

@@ -3,12 +3,15 @@ package fun.bitdev.telechat;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.KeyguardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Insets;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -49,6 +52,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class MainActivity extends Activity {
 
+    public static final String EXTRA_CALL_ID = "extra_call_id";
+    public static final String EXTRA_CALL_ACTION = "extra_call_action";
+    public static final String EXTRA_CALL_MODE = "extra_call_mode";
+    public static final String EXTRA_CALLER_NAME = "extra_caller_name";
+    public static final String EXTRA_AVATAR_URL = "extra_avatar_url";
+    public static final String EXTRA_AVATAR_COLOR = "extra_avatar_color";
+
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_NOTIF_PERMISSION = 1002;
     private static final int REQ_MEDIA_PERMISSION = 1003;
@@ -76,6 +86,7 @@ public class MainActivity extends Activity {
     private String baseHost;
     private String pendingOpenChatId;
     private String pendingSharePayloadJson;
+    private String pendingCallPayloadJson;
     private volatile boolean pageLoaded = false;
     private boolean pendingOpenUpdates = false;
     private volatile boolean activityVisible = true;
@@ -211,7 +222,11 @@ public class MainActivity extends Activity {
                     pendingSharePayloadJson = null;
                     deliverShareToWebView(payload);
                 }
-                if (pendingOpenUpdates) {
+                if (pendingCallPayloadJson != null) {
+                    String callPayload = pendingCallPayloadJson;
+                    pendingCallPayloadJson = null;
+                    deliverCallActionToWebView(callPayload);
+                } else if (pendingOpenUpdates) {
                     pendingOpenUpdates = false;
                     openUpdatesInWebView();
                 } else if (pendingOpenChatId != null) {
@@ -346,7 +361,31 @@ public class MainActivity extends Activity {
             handleShareIntent(intent);
             return;
         }
+        String callAction = intent.getStringExtra(EXTRA_CALL_ACTION);
+        String callId = intent.getStringExtra(EXTRA_CALL_ID);
         String chatId = intent.getStringExtra(MessageService.EXTRA_CHAT_ID);
+        if (callAction != null && !callAction.isEmpty()) {
+            MessageService.cancelIncomingCallNotification(this, callId);
+            if ("answer".equals(callAction)) {
+                applyCallWakeState(true);
+            }
+            try {
+                JSONObject callObj = new JSONObject();
+                callObj.put("callId", callId != null ? callId : "");
+                callObj.put("chatId", chatId != null ? chatId : "");
+                callObj.put("action", callAction);
+                String callMode = intent.getStringExtra(EXTRA_CALL_MODE);
+                callObj.put("mode", callMode != null && !callMode.isEmpty() ? callMode : "audio");
+                String callPayload = callObj.toString();
+                if (webView != null && pageLoaded) {
+                    deliverCallActionToWebView(callPayload);
+                } else {
+                    pendingCallPayloadJson = callPayload;
+                }
+            } catch (Exception ignored) {
+            }
+            return;
+        }
         if (chatId != null && !chatId.isEmpty()) {
             if (webView != null && pageLoaded) {
                 openChatInWebView(chatId);
@@ -354,6 +393,52 @@ public class MainActivity extends Activity {
                 pendingOpenChatId = chatId;
             }
         }
+    }
+
+    private void applyCallWakeState(boolean inCall) {
+        runOnUiThread(() -> {
+            Window w = getWindow();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(inCall);
+                setTurnScreenOn(inCall);
+            }
+            if (w != null) {
+                if (inCall) {
+                    w.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) {
+                        w.addFlags(
+                            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                        );
+                    }
+                } else {
+                    w.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) {
+                        w.clearFlags(
+                            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
+                                | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                        );
+                    }
+                }
+            }
+            if (inCall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+                    if (km != null && km.isKeyguardLocked()) {
+                        km.requestDismissKeyguard(this, null);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        });
+    }
+
+    private void deliverCallActionToWebView(String payloadJson) {
+        if (webView == null || payloadJson == null) return;
+        webView.post(() -> webView.evaluateJavascript(
+            "if (window.__telechatHandleCallAction) { window.__telechatHandleCallAction(" + payloadJson + "); }",
+            null
+        ));
     }
 
     private void handleShareIntent(Intent intent) {
@@ -709,6 +794,25 @@ public class MainActivity extends Activity {
                     w.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
                 } else {
                     w.clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void setCallAudioMode(boolean inCall, boolean speakerOn) {
+            applyCallWakeState(inCall);
+            runOnUiThread(() -> {
+                try {
+                    AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+                    if (am == null) return;
+                    if (inCall) {
+                        am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+                        am.setSpeakerphoneOn(speakerOn);
+                    } else {
+                        am.setSpeakerphoneOn(false);
+                        am.setMode(AudioManager.MODE_NORMAL);
+                    }
+                } catch (Exception ignored) {
                 }
             });
         }

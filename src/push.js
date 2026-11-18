@@ -242,11 +242,18 @@ function createPushService({ config, storage, transportFetch = null }) {
 
   async function sendFcmToToken(token, payload) {
     if (!fetchImpl || !token) return { ok: false, gone: false };
+    const pData = payload && payload.data ? payload.data : {};
     const dataMap = {
-      type: String(payload.type || 'message'),
-      chatId: String((payload.data && payload.data.chatId) || ''),
-      messageId: String((payload.data && payload.data.messageId) || ''),
-      sender: String((payload.data && payload.data.sender) || ''),
+      type: String(payload.type || pData.type || 'message'),
+      chatId: String(pData.chatId || ''),
+      messageId: String(pData.messageId || ''),
+      callId: String(pData.callId || ''),
+      callMode: String(pData.mode || pData.callMode || 'audio'),
+      caller: String(pData.sender || ''),
+      callerName: String(pData.callerName || payload.title || 'VibeRoom'),
+      avatarUrl: String(pData.avatarUrl || ''),
+      avatarColor: String(pData.avatarColor || ''),
+      sender: String(pData.sender || ''),
       senderName: String(payload.title || 'VibeRoom'),
       preview: String(payload.body || 'New message'),
       title: String(payload.title || 'VibeRoom'),
@@ -327,11 +334,13 @@ function createPushService({ config, storage, transportFetch = null }) {
     const staleEndpoints = [];
     const staleFcmTokens = [];
 
-    const webPromises = tokens.webSubscriptions.map(async (sub) => {
-      const res = await sendWebPushToSub(sub, payload);
-      if (res.ok) webSent++;
-      else if (res.gone && res.endpoint) staleEndpoints.push(res.endpoint);
-    });
+    const webPromises = payload && payload.silentPush
+      ? []
+      : tokens.webSubscriptions.map(async (sub) => {
+          const res = await sendWebPushToSub(sub, payload);
+          if (res.ok) webSent++;
+          else if (res.gone && res.endpoint) staleEndpoints.push(res.endpoint);
+        });
     const fcmPromises = tokens.fcmTokens.map(async (entry) => {
       const res = await sendFcmToToken(entry.token, payload);
       if (res.ok) fcmSent++;
